@@ -587,6 +587,17 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         _psFeedbackRateHz = rateHz;
     }
     private readonly int[] _psInfoBuf = new int[16];
+    // GetPSDisp writes into caller memory, so these are sized from calcc's
+    // own constants and reused rather than allocated per call. Guarded by
+    // _psLock along with _psInfoBuf.
+    private readonly double[] _psDispX = new double[PsCurve.NativeSampleCount];
+    private readonly double[] _psDispYm = new double[PsCurve.NativeSampleCount];
+    private readonly double[] _psDispYc = new double[PsCurve.NativeSampleCount];
+    private readonly double[] _psDispYs = new double[PsCurve.NativeSampleCount];
+    private readonly double[] _psDispXmCor = new double[PsCurve.CurvePoints];
+    private readonly double[] _psDispYmCor = new double[PsCurve.CurvePoints];
+    private readonly double[] _psDispXaCor = new double[PsCurve.CurvePoints];
+    private readonly double[] _psDispYaCor = new double[PsCurve.CurvePoints];
     // Edge-triggered state-transition log target. 255 is an out-of-range
     // sentinel so the first observed state always logs (LRESET..LTURNON
     // = 0..9 per calcc.c:543-552). Updated under _psLock.
@@ -4006,6 +4017,91 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                 }
             }
         }
+    }
+
+    /// <summary>calcc's display curves — see <see cref="PsCurve"/>.</summary>
+    /// <remarks>
+    /// Only worth calling on a CalibrationAttempts edge: calcc refreshes
+    /// these buffers at the end of an accepted calc() pass and they are
+    /// otherwise the same arrays as last time. Returns null when PS is not
+    /// armed, when there is no TXA, or before the first accepted fit —
+    /// disp.nsamps stays 0 until then, which is how "no curve yet" is told
+    /// apart from a flat one.
+    /// </remarks>
+    public PsCurve? GetPsCurve()
+    {
+        if (_disposed != 0) return null;
+        int? txa;
+        lock (_txaLock) txa = _txaChannelId;
+        if (txa is not int id) return null;
+        if (!_psEnabled) return null;
+
+        int nsamps, cpts, attempts;
+        double phsRefDeg;
+        float[] magCor, phaseDeg, scatterX, scatterMag, scatterPhase;
+
+        lock (_psLock)
+        {
+            unsafe
+            {
+                fixed (double* px = _psDispX)
+                fixed (double* pym = _psDispYm)
+                fixed (double* pyc = _psDispYc)
+                fixed (double* pys = _psDispYs)
+                fixed (double* pxm = _psDispXmCor)
+                fixed (double* pymc = _psDispYmCor)
+                fixed (double* pxa = _psDispXaCor)
+                fixed (double* pyac = _psDispYaCor)
+                {
+                    int n = 0, c = 0;
+                    double phs = 0.0;
+                    NativeMethods.GetPSDisp(id, px, pym, pyc, pys, pxm, pymc, pxa, pyac,
+                                            &n, &c, &phs);
+                    nsamps = n;
+                    cpts = c;
+                    phsRefDeg = phs;
+                }
+                fixed (int* p = _psInfoBuf)
+                {
+                    NativeMethods.GetPSInfo(id, (IntPtr)p);
+                }
+                attempts = _psInfoBuf[5];
+            }
+
+            // A calcc that has never completed a fit reports nsamps 0 and
+            // leaves the curve buffers at their malloc0 zeros. Zeros would
+            // draw as a perfectly corrected amplifier, which is the most
+            // misleading thing this could possibly show.
+            if (nsamps <= 0 || cpts <= 0) return null;
+            if (cpts > PsCurve.CurvePoints) cpts = PsCurve.CurvePoints;
+            if (nsamps > PsCurve.NativeSampleCount) nsamps = PsCurve.NativeSampleCount;
+
+            magCor = new float[cpts];
+            phaseDeg = new float[cpts];
+            for (int k = 0; k < cpts; k++)
+            {
+                magCor[k] = (float)_psDispYmCor[k];
+                phaseDeg[k] = (float)_psDispYaCor[k];
+            }
+
+            // Every Nth sample, so the kept points stay spread across
+            // calcc's buckets instead of clustering in the first ones.
+            int stride = Math.Max(1, nsamps / PsCurve.ScatterPoints);
+            int keep = Math.Min(PsCurve.ScatterPoints, (nsamps + stride - 1) / stride);
+            scatterX = new float[keep];
+            scatterMag = new float[keep];
+            scatterPhase = new float[keep];
+            const double Rad2Deg = 180.0 / Math.PI;
+            for (int k = 0, i = 0; k < keep && i < nsamps; k++, i += stride)
+            {
+                scatterX[k] = (float)_psDispX[i];
+                scatterMag[k] = (float)_psDispYm[i];
+                scatterPhase[k] = (float)(Rad2Deg * Math.Atan2(_psDispYs[i], _psDispYc[i]));
+            }
+        }
+
+        return new PsCurve(magCor, phaseDeg, scatterX, scatterMag, scatterPhase,
+                           (float)phsRefDeg, attempts);
     }
 
     public PsStageMeters GetPsStageMeters()

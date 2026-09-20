@@ -1111,6 +1111,24 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void GetPSMaxTX(int channel, out double maxtx);
 
+    // calcc's display buffers — the AM/AM and AM/PM curves plus the sample
+    // cloud they were fitted through (calcc.c:2282).
+    //
+    // BUFFER SIZES ARE NOT NEGOTIABLE, and getting them wrong corrupts the
+    // engine's heap rather than failing: GetPSDisp memcpys disp.nsamps
+    // doubles into x/ym/yc/ys BEFORE it reports what nsamps was, and
+    // DISP_PTS doubles into the four *_cor buffers. nsamps is the
+    // collection size, 16 buckets x 256 = 4096 (calcc.c:339-369), and
+    // DISP_PTS is 512 (calcc.c:308). Pass buffers of at least those
+    // lengths; see PsCurve.NativeSampleCount / PsCurve.CurvePoints.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void GetPSDisp(
+        int channel,
+        double* x, double* ym, double* yc, double* ys,
+        double* xmCor, double* ymCor, double* xaCor, double* yaCor,
+        int* nsampsOut, int* cptsOut, double* phsRefDegOut);
+
     // pscc float variant (calcc.c:840). Feed paired TX-modulator IQ + RX
     // feedback IQ. Block size is 1024 complex samples per pihpsdr's
     // receiver.c:636. mox/solidmox are dead args — pass 0/0.

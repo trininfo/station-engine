@@ -148,6 +148,11 @@ public sealed class TxMetersService : BackgroundService
     // show up before / after the FWD-REF pair on any given packet.
     private double _paTempAdc;
     private bool _seenPaTempSample;
+    // Last info[5] seen, so a new calcc fit can be told from a repeat and
+    // the PS curve frame only goes out when there is a new curve behind it.
+    // -1 rather than 0 so the first fit of a session counts as an edge.
+    private int _lastPsCalibrationAttempts = -1;
+    private uint _psCurveSeq;
     private DateTimeOffset? _paTempUpdatedUtc;
     private bool _seenSample;
     private ushort _latestRawFwd;
@@ -626,6 +631,40 @@ public sealed class TxMetersService : BackgroundService
                     // Mirror the live read-out into the StateDto so REST/state
                     // pollers see it too — same pattern PA/Mic meters use.
                     _radio.UpdatePsLiveReadout(psm.FeedbackLevel, psm.CalState, psm.Correcting);
+
+                    // Correction curves, on a fit edge only. calcc rewrites
+                    // its display buffers at the end of an accepted calc()
+                    // pass and at no other time, so info[5] moving is exactly
+                    // the signal that there is something new to send. A
+                    // 10 KB frame on a timer would be the same curve over
+                    // and over.
+                    if (psm.CalibrationAttempts != _lastPsCalibrationAttempts)
+                    {
+                        _lastPsCalibrationAttempts = psm.CalibrationAttempts;
+                        try
+                        {
+                            if (ps.GetPsCurve() is { } curve)
+                            {
+                                _hub.Broadcast(new PsCurveFrame(
+                                    Seq: unchecked(_psCurveSeq++),
+                                    TsUnixMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                                    Points: checked((ushort)curve.Points),
+                                    PhsRefDeg: curve.PhsRefDeg,
+                                    CalibrationAttempts: (uint)Math.Max(0, curve.CalibrationAttempts),
+                                    MagCorrection: curve.MagCorrection,
+                                    PhaseDeg: curve.PhaseDeg,
+                                    ScatterX: curve.ScatterX,
+                                    ScatterMag: curve.ScatterMag,
+                                    ScatterPhaseDeg: curve.ScatterPhaseDeg));
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // A curve is a nicety; the meter loop is not. Never
+                            // let a display buffer take the 10 Hz tick down.
+                            _log.LogDebug(ex, "ps.curve broadcast failed");
+                        }
+                    }
                 }
 
                 // PA temperature broadcast — 2 Hz always, throttled against

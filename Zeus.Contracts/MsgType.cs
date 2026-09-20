@@ -134,6 +134,23 @@ public enum MsgType : byte
     // 16-byte header) — same 10 Hz rate logic.
     PsMeters = 0x18,
 
+    // Server -> client. PureSignal correction curves: calcc's AM/AM
+    // magnitude correction and AM/PM phase curve (DISP_PTS = 512 points
+    // each) plus a decimated copy of the sample cloud they were fitted
+    // through, from GetPSDisp (native/wdsp/calcc.c:2282). HEADERED like
+    // DisplayFrame — it is a ~10 KB frame and the header timestamp is what
+    // lets a client age a curve.
+    //
+    // Emitted only on a CalibrationAttempts (info[5]) edge while PS is
+    // armed, because that is the only moment calcc refreshes those
+    // buffers. Sending it on a timer would repeat identical curves.
+    //
+    // FORK-LOCAL ALLOCATION. 0x28 is unused upstream at the time of
+    // writing; if Zeus-SDR takes it for something else, this is the byte
+    // that has to move, and both this file and the Poseidon client's
+    // src/protocol/msgtype.js move together.
+    PsCurve = 0x28,
+
     // Server → client (RX telemetry v2). Compatible additive extension of
     // RxMeter (0x14): carries the full set of RXA stage meters — signal
     // peak/avg (calibrated dBm), ADC peak/avg (dBFS), AGC gain (signed dB,

@@ -487,6 +487,13 @@ public interface IDspEngine : IDisposable
     /// the engine has no TXA. Safe to poll concurrently.</summary>
     PsStageMeters GetPsStageMeters();
 
+    /// <summary>calcc's current correction curves and sample cloud, or null
+    /// when PS isn't armed, the engine has no TXA, or no fit has landed yet.
+    /// Defaulted to null so engines without a WDSP calcc behind them (the
+    /// synthetic engine, the external P3 TX bridge) need not implement it.
+    /// </summary>
+    PsCurve? GetPsCurve() => null;
+
     /// <summary>Reset PS state — calls <c>SetPSControl(1,0,0,0)</c>. Useful
     /// after an aborted calibration or when changing radios.</summary>
     void ResetPs();
