@@ -626,6 +626,13 @@ public sealed class RadioService : IDisposable
         // legacy DB row falls back to the default-OFF baseline so the operator
         // sees no behaviour change unless they enable.
         var persistedCfc = _dspSettingsStore.GetCfc() ?? CfcConfig.Default;
+        // TX/RX equalizer + TX noise gate (fork-local). Same rule as CFC:
+        // null on a fresh install or a row that predates these fields falls
+        // back to a flat, OFF baseline, so a first connect behaves exactly
+        // as it did before the suite existed.
+        var persistedTxEq = _dspSettingsStore.GetTxEq() ?? GraphicEqConfig.Default;
+        var persistedRxEq = _dspSettingsStore.GetRxEq() ?? GraphicEqConfig.Default;
+        var persistedTxGate = _dspSettingsStore.GetTxGate() ?? TxGateConfig.Default;
         // AGC mode + custom params. Null on a fresh install / legacy DB row
         // falls back to the Med default so first-connect behaviour is unchanged.
         var persistedAgc = NormalizeAgcConfig(
@@ -870,6 +877,9 @@ public sealed class RadioService : IDisposable
             TwoToneFreq2: ps?.TwoToneFreq2 ?? 1900.0,
             TwoToneMag: ps?.TwoToneMag ?? 0.49,
             Cfc: persistedCfc,
+            TxEq: persistedTxEq,
+            RxEq: persistedRxEq,
+            TxGate: persistedTxGate,
             // Hydrate drive sliders from RadioStateStore so a fresh frontend
             // connect lands on the operator's last-set values. The private
             // fields above (_drivePct / _tunePct) were already hydrated in the
@@ -6158,6 +6168,51 @@ public sealed class RadioService : IDisposable
         _log.LogInformation(
             "radio.setCfc enabled={Enabled} peq={Peq} preComp={Pre:F1}dB prePeq={PrePeq:F1}dB",
             cfg.Enabled, cfg.PostEqEnabled, cfg.PreCompDb, cfg.PrePeqDb);
+        return Snapshot();
+    }
+
+    /* ---- TX Audio Suite: equalizers and the TX noise gate ----------
+     *
+     * Same shape as SetCfc above: mutate the StateDto, persist, and let
+     * DspPipelineService.OnRadioStateChanged carry it to WDSP. Each stage
+     * is independent and each is optional — nothing here turns anything on
+     * that the operator did not ask for.
+     */
+
+    public StateDto SetTxEq(GraphicEqConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!cfg.IsWellFormed)
+            throw new ArgumentException("EQ config out of range", nameof(cfg));
+        Mutate(s => s with { TxEq = cfg });
+        _dspSettingsStore.UpsertEq(cfg, transmit: true);
+        _log.LogInformation(
+            "radio.setTxEq enabled={On} preamp={Preamp}dB", cfg.Enabled, cfg.PreampDb);
+        return Snapshot();
+    }
+
+    public StateDto SetRxEq(GraphicEqConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!cfg.IsWellFormed)
+            throw new ArgumentException("EQ config out of range", nameof(cfg));
+        Mutate(s => s with { RxEq = cfg });
+        _dspSettingsStore.UpsertEq(cfg, transmit: false);
+        _log.LogInformation(
+            "radio.setRxEq enabled={On} preamp={Preamp}dB", cfg.Enabled, cfg.PreampDb);
+        return Snapshot();
+    }
+
+    public StateDto SetTxGate(TxGateConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!cfg.IsWellFormed)
+            throw new ArgumentException("gate config out of range", nameof(cfg));
+        Mutate(s => s with { TxGate = cfg });
+        _dspSettingsStore.Upsert(cfg);
+        _log.LogInformation(
+            "radio.setTxGate enabled={On} thresh={Thresh:F1}dB",
+            cfg.Enabled, cfg.ThresholdDb);
         return Snapshot();
     }
 

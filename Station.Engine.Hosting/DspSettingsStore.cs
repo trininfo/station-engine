@@ -566,6 +566,84 @@ public sealed class DspSettingsStore : IDisposable
             Bands: bands);
     }
 
+    /* ---- TX/RX equalizer + TX noise gate --------------------------
+     *
+     * Null return means "never written", and the caller falls back to the
+     * Default rather than to a zeroed struct — a flat EQ that is OFF is not
+     * the same thing as an EQ nobody has configured, and only the second
+     * one should be overwritable by a later migration.
+     */
+
+    public GraphicEqConfig? GetTxEq(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        if (e?.TxEqEnabled is null) return null;
+        return ReadEq(e.TxEqEnabled.Value, e.TxEqPreampDb, e.TxEqBandsDb);
+    }
+
+    public GraphicEqConfig? GetRxEq(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        if (e?.RxEqEnabled is null) return null;
+        return ReadEq(e.RxEqEnabled.Value, e.RxEqPreampDb, e.RxEqBandsDb);
+    }
+
+    private static GraphicEqConfig ReadEq(bool enabled, int? preamp, int[]? bands)
+    {
+        // A row written by an older build could carry the wrong band count.
+        // Pad or trim rather than throwing: a stored profile is not worth
+        // failing a connect over.
+        var b = new int[GraphicEqConfig.BandCount];
+        if (bands is not null)
+            Array.Copy(bands, b, Math.Min(bands.Length, b.Length));
+        return new GraphicEqConfig(enabled, preamp ?? 0, b);
+    }
+
+    public TxGateConfig? GetTxGate(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        if (e?.TxGateEnabled is null) return null;
+        var d = TxGateConfig.Default;
+        return new TxGateConfig(
+            e.TxGateEnabled.Value,
+            e.TxGateThresholdDb ?? d.ThresholdDb,
+            e.TxGateMutedGainDb ?? d.MutedGainDb);
+    }
+
+    public void UpsertEq(GraphicEqConfig config, bool transmit, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var bands = (int[])config.BandsDb.Clone();
+        var existing = _entries.FindOne(x => x.ProfileId == profileId)
+                       ?? new DspSettingsEntry { ProfileId = profileId };
+        if (transmit)
+        {
+            existing.TxEqEnabled = config.Enabled;
+            existing.TxEqPreampDb = config.PreampDb;
+            existing.TxEqBandsDb = bands;
+        }
+        else
+        {
+            existing.RxEqEnabled = config.Enabled;
+            existing.RxEqPreampDb = config.PreampDb;
+            existing.RxEqBandsDb = bands;
+        }
+        if (existing.Id == 0) _entries.Insert(existing);
+        else _entries.Update(existing);
+    }
+
+    public void Upsert(TxGateConfig config, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var existing = _entries.FindOne(x => x.ProfileId == profileId)
+                       ?? new DspSettingsEntry { ProfileId = profileId };
+        existing.TxGateEnabled = config.Enabled;
+        existing.TxGateThresholdDb = config.ThresholdDb;
+        existing.TxGateMutedGainDb = config.MutedGainDb;
+        if (existing.Id == 0) _entries.Insert(existing);
+        else _entries.Update(existing);
+    }
+
     public void Upsert(NrConfig config, string profileId = "default")
     {
         config = config with { NrMode = NormalizeNrMode(config.NrMode) };
@@ -757,6 +835,20 @@ public sealed class DspSettingsEntry
 {
     public int Id { get; set; }
     public string ProfileId { get; set; } = string.Empty;
+    // ---- TX/RX equalizer + TX noise gate (fork-local) ----
+    // Stored as arrays rather than the CFC block's per-band scalar columns:
+    // LiteDB serialises int[] natively, and ten bands times two chains would
+    // otherwise be twenty columns of the same thing. Null on a row that
+    // predates these fields, which the getters read as "never configured".
+    public bool? TxEqEnabled { get; set; }
+    public int? TxEqPreampDb { get; set; }
+    public int[]? TxEqBandsDb { get; set; }
+    public bool? RxEqEnabled { get; set; }
+    public int? RxEqPreampDb { get; set; }
+    public int[]? RxEqBandsDb { get; set; }
+    public bool? TxGateEnabled { get; set; }
+    public double? TxGateThresholdDb { get; set; }
+    public double? TxGateMutedGainDb { get; set; }
     public NrMode NrMode { get; set; }
     public bool AnfEnabled { get; set; }
     public bool SnbEnabled { get; set; }

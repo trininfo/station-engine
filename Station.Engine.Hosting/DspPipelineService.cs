@@ -1431,6 +1431,11 @@ public class DspPipelineService : BackgroundService,
     // reconnect tears down the engine, we re-push the CFC profile too so the
     // new WdspDspEngine instance picks up the operator's persisted config.
     private CfcConfig _appliedCfc = CfcConfig.Default;
+    // Last values pushed to the engine, so a state change that does not
+    // touch these does not re-push a 16384-tap FIR rebuild on every tick.
+    private GraphicEqConfig _appliedTxEq = GraphicEqConfig.Default;
+    private GraphicEqConfig _appliedRxEq = GraphicEqConfig.Default;
+    private TxGateConfig _appliedTxGate = TxGateConfig.Default;
 
     // RX front-end (step attenuator + Mercury preamp). Mirrored to a live
     // Protocol2Client when the value moves; on P1 these go through
@@ -6175,6 +6180,38 @@ public class DspPipelineService : BackgroundService,
         {
             engine.SetCfcConfig(cfc);
             _appliedCfc = cfc;
+        }
+
+        // ---- TX/RX equalizer + TX noise gate (fork-local) --------------
+        // Same resync rule as CFC and PS: a P2 disconnect tears the engine
+        // down, so the next push has to re-assert the operator's profile
+        // even when the StateDto value has not changed. Comparison goes
+        // through ValueEquals because these records hold an int[], and
+        // record equality on an array is reference equality — the exact
+        // trap the CFC block above documents.
+        var txEq = s.TxEq ?? GraphicEqConfig.Default;
+        if (resync || !txEq.ValueEquals(_appliedTxEq))
+        {
+            engine.SetTxEq(txEq);
+            _appliedTxEq = txEq;
+        }
+
+        var rxEq = s.RxEq ?? GraphicEqConfig.Default;
+        if (resync || !rxEq.ValueEquals(_appliedRxEq))
+        {
+            // Both receivers, the way SetSquelch above does it — an RX EQ
+            // that only applied to RX1 would be a surprise the moment the
+            // operator listened to RX2.
+            engine.SetRxEq(channel, rxEq);
+            if (rx2Channel >= 0) engine.SetRxEq(rx2Channel, rxEq);
+            _appliedRxEq = rxEq;
+        }
+
+        var txGate = s.TxGate ?? TxGateConfig.Default;
+        if (resync || txGate != _appliedTxGate)
+        {
+            engine.SetTxGate(txGate);
+            _appliedTxGate = txGate;
         }
 
         // ---- RX step attenuator (operator + auto-ATT offset) -----------

@@ -1304,6 +1304,15 @@ public sealed record StateDto(
     // null at the engine seam means "use CfcConfig.Default" — same pattern
     // as the Nr field above. Persisted globally via DspSettingsStore.
     CfcConfig? Cfc = null,
+    // ---- TX/RX equalizer + TX noise gate (fork-local) ----
+    // Same nullable convention as Cfc above: a legacy state frame without
+    // these deserializes unchanged, and null at the engine seam means "use
+    // the Default", which is flat and off. Persisted via DspSettingsStore.
+    // Every one of these stages is optional — off is the shipped state and
+    // the operator turns on only what they want.
+    GraphicEqConfig? TxEq = null,
+    GraphicEqConfig? RxEq = null,
+    TxGateConfig? TxGate = null,
 
     // ---- Drive slider state ----
     // Operator drive slider position 0..100 (% of MaxPowerWatts via the

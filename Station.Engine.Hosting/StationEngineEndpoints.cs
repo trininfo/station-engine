@@ -200,6 +200,7 @@ public static class StationEngineEndpoints
         endpoints.MapTxTimingAndTestEndpoints();
         endpoints.MapTxDiagnosticsEndpoint();
         endpoints.MapPureSignalEndpoints();
+        endpoints.MapAudioSuiteEndpoints();
         endpoints.MapTxMonitorEndpoint();
         endpoints.MapReceiverDspEndpoints();
         endpoints.MapCfcEndpoint();
