@@ -4318,6 +4318,112 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
 
     private DateTime _lastTxMeterLogUtc;
 
+    /* ---- TX/RX equalizer and TX noise gate -------------------------
+     *
+     * Thetis's audio suite, driven through the same WDSP entry points
+     * Thetis uses. Nothing here chooses where a stage sits: create_txa
+     * fixes the order as gate -> EQ -> preemph -> leveler -> CFC ->
+     * compressor -> ALC, with every stage reading and writing the same
+     * midbuff in sequence. These methods only set parameters and run
+     * flags on stages that already exist in that order.
+     */
+
+    public void SetTxEq(GraphicEqConfig cfg)
+    {
+        if (_disposed != 0 || cfg is null) return;
+        int? txa;
+        lock (_txaLock) txa = _txaChannelId;
+        if (txa is not int id) return;
+
+        // Profile before run: turning the stage on and THEN loading the
+        // curve transmits one block through whatever the eqp was last left
+        // holding, which on a fresh channel is WDSP's shaped default_G
+        // (TXA.c:116) rather than anything the operator asked for.
+        var native = cfg.ToNativeArray();
+        unsafe
+        {
+            fixed (int* p = native) NativeMethods.SetTXAGrphEQ10(id, p);
+        }
+        NativeMethods.SetTXAEQRun(id, cfg.Enabled ? 1 : 0);
+        _log.LogInformation(
+            "wdsp.txEq run={Run} preamp={Preamp}dB bands=[{Bands}]",
+            cfg.Enabled, cfg.PreampDb, string.Join(",", cfg.BandsDb));
+    }
+
+    public void SetRxEq(int channelId, GraphicEqConfig cfg)
+    {
+        if (_disposed != 0 || cfg is null) return;
+        if (!_channels.TryGetValue(channelId, out var state) || state.Stopped) return;
+        int id = state.Id;
+
+        var native = cfg.ToNativeArray();
+        unsafe
+        {
+            fixed (int* p = native) NativeMethods.SetRXAGrphEQ10(id, p);
+        }
+        NativeMethods.SetRXAEQRun(id, cfg.Enabled ? 1 : 0);
+        _log.LogInformation(
+            "wdsp.rxEq ch={Ch} run={Run} preamp={Preamp}dB",
+            channelId, cfg.Enabled, cfg.PreampDb);
+    }
+
+    public void SetTxGate(TxGateConfig cfg)
+    {
+        if (_disposed != 0 || cfg is null) return;
+        int? txa;
+        lock (_txaLock) txa = _txaChannelId;
+        if (txa is not int id) return;
+
+        // Thresholds before run, for the same reason as the EQ: AMSQ is
+        // constructed with an unmute level of 0.200 linear and would gate
+        // against that for a block if run came first.
+        NativeMethods.SetTXAAMSQThreshold(id, cfg.ThresholdDb);
+        NativeMethods.SetTXAAMSQMutedGain(id, cfg.MutedGainDb);
+        NativeMethods.SetTXAAMSQRun(id, cfg.Enabled ? 1 : 0);
+        _log.LogInformation(
+            "wdsp.txGate run={Run} thresh={Thresh:F1}dB muted={Muted:F1}dB",
+            cfg.Enabled, cfg.ThresholdDb, cfg.MutedGainDb);
+    }
+
+    public bool TryGetEqDraw(bool transmit, int channelId, Span<double> x, Span<double> y)
+    {
+        if (_disposed != 0) return false;
+        if (x.Length < GraphicEqConfig.DrawPoints || y.Length < GraphicEqConfig.DrawPoints)
+            return false;
+
+        int id;
+        if (transmit)
+        {
+            int? txa;
+            lock (_txaLock) txa = _txaChannelId;
+            if (txa is not int t) return false;
+            id = t;
+        }
+        else if (_channels.TryGetValue(channelId, out var state) && !state.Stopped)
+        {
+            id = state.Id;
+        }
+        else
+        {
+            return false;
+        }
+
+        // GetXXXEQDraw memcpys `upts` doubles and never reports the count;
+        // upts is 1024 from create_nurbs (eq.c:64) and nothing mutates it.
+        // The length guard above is what keeps that from being a heap
+        // overwrite if the constant and the native ever disagree.
+        unsafe
+        {
+            fixed (double* px = x)
+            fixed (double* py = y)
+            {
+                if (transmit) NativeMethods.GetTXAEQDraw(id, px, py);
+                else NativeMethods.GetRXAEQDraw(id, px, py);
+            }
+        }
+        return true;
+    }
+
     public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
     {
         if (_disposed != 0) return 0;

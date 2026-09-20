@@ -522,6 +522,23 @@ public interface IDspEngine : IDisposable
     /// is open or on Synthetic.</summary>
     void SetCfcConfig(CfcConfig cfg);
 
+    /// <summary>TX ten-band equalizer — WDSP's eqp stage, driven through
+    /// the GrphEQ10 convention Thetis uses. Defaulted to a no-op so
+    /// engines without a WDSP TXA behind them need not implement it.</summary>
+    void SetTxEq(GraphicEqConfig cfg) { }
+
+    /// <summary>RX ten-band equalizer for one receiver channel.</summary>
+    void SetRxEq(int channelId, GraphicEqConfig cfg) { }
+
+    /// <summary>TX noise gate — WDSP's AMSQ stage on the mic.</summary>
+    void SetTxGate(TxGateConfig cfg) { }
+
+    /// <summary>The equalizer response curve WDSP built, for plotting:
+    /// <paramref name="x"/> in Hz and <paramref name="y"/> in dB, both
+    /// <see cref="GraphicEqConfig.DrawPoints"/> long. False when there is no channel
+    /// or the engine has no equalizer.</summary>
+    bool TryGetEqDraw(bool transmit, int channelId, Span<double> x, Span<double> y) => false;
+
     // ----------------- TX Monitor (preview path, issue #106 follow-up) ----
     // Lets the operator hear the post-bandpass / post-CFIR TX audio on a local
     // audio sink — with or without keying — so they can dial in the

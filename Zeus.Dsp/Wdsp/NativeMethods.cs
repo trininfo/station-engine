@@ -264,6 +264,20 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAAMSQMaxTail(int channel, double tail);
 
+    // RX ten-band equalizer, the mirror of the TX one (eq.c:478). Same
+    // int[11] convention, same fixed frequencies.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEQRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void SetRXAGrphEQ10(int channel, int* rxeq);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void GetRXAEQDraw(int channel, double* x, double* y);
+
     // FM — fmsq.h. Threshold ~0..1.
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -939,6 +953,39 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXAEQRun(int channel, int run);
+
+    // Thetis's ten-band TX equalizer (eq.c:692). txeq is an int[11]:
+    // [0] is overall gain and [1..10] are the band gains in dB, at WDSP's
+    // fixed 32/63/125/250/500/1k/2k/4k/8k/16k Hz. SetTXAGrphEQ10 writes
+    // those frequencies itself, so the caller supplies gains only — which
+    // is exactly the contract Thetis's EQ form uses, and the reason to
+    // prefer it over SetTXAEQProfile for a ten-band UI.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void SetTXAGrphEQ10(int channel, int* txeq);
+
+    // The response curve WDSP actually built, for plotting. Same buffer
+    // hazard as GetPSDisp: it memcpys `upts` doubles into X and Y and never
+    // reports how many. upts is fixed at 1024 by create_nurbs in
+    // create_eqimp (eq.c:64) and nothing mutates it afterwards —
+    // SetTXAEQCurve changes degree/method, not the point count. Pass
+    // buffers of at least WdspEq.DrawPoints.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void GetTXAEQDraw(int channel, double* x, double* y);
+
+    // TX noise gate. WDSP calls it AMSQ — the same squelch machinery the RX
+    // side uses, run on the mic. Threshold is in dB; MutedGain is what the
+    // gate attenuates to rather than a hard mute, so a gate set 20 dB down
+    // still passes room tone at -20 dB instead of chopping to digital
+    // silence.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAAMSQThreshold(int channel, double threshold);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAAMSQMutedGain(int channel, double dBlevel);
 
     // TUN carrier generator (wdsp.h:586-589) injected post-DSP. Zeus uses
     // mode 0 with a zero-Hz tone outside CW and a sideband-signed CW pitch
