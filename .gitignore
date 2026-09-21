@@ -4,3 +4,8 @@
 **/obj/
 *.user
 *.suo
+
+# Local CMake build trees for the native libraries. NATIVE-BUILD.md has
+# you build into native/build*; those are intermediates, never artifacts.
+# The artifact is the staged DLL under Zeus.Dsp/runtimes/<rid>/native/.
+native/build*/
