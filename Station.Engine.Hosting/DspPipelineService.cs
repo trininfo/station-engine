@@ -1391,6 +1391,11 @@ public class DspPipelineService : BackgroundService,
     private double _appliedPsLoopDelaySec;
     private double _appliedPsAmpDelayNs = 150.0;
     private double _appliedPsHwPeak = 0.4072;
+    private bool _appliedPsPinMode = true;
+    private bool _appliedPsMapMode;
+    private bool _appliedPsStabilize;
+    private int _appliedPsInts = 16;
+    private int _appliedPsSpi = 256;
     private PsFeedbackSource _appliedPsFeedbackSource = PsFeedbackSource.Internal;
     private int _appliedExternalPsFeedbackAttenuationDb = -1;
     private int _appliedExternalPsCorrectionMode = -1;
@@ -6081,6 +6086,23 @@ public class DspPipelineService : BackgroundService,
             _appliedPsMoxDelaySec = s.PsMoxDelaySec;
             _appliedPsLoopDelaySec = s.PsLoopDelaySec;
             _appliedPsAmpDelayNs = s.PsAmpDelayNs;
+        }
+        // FORK-LOCAL: Thetis PS-form switches. Deferred while keyed like the
+        // blocks around it; an ints/spi change restarts the collection.
+        if (!psApplyDeferred && (resync
+            || psArmRising
+            || s.PsPinMode != _appliedPsPinMode
+            || s.PsMapMode != _appliedPsMapMode
+            || s.PsStabilize != _appliedPsStabilize
+            || s.PsInts != _appliedPsInts
+            || s.PsSpi != _appliedPsSpi))
+        {
+            engine.SetPsCalccSwitches(s.PsPinMode, s.PsMapMode, s.PsStabilize, s.PsInts, s.PsSpi);
+            _appliedPsPinMode = s.PsPinMode;
+            _appliedPsMapMode = s.PsMapMode;
+            _appliedPsStabilize = s.PsStabilize;
+            _appliedPsInts = s.PsInts;
+            _appliedPsSpi = s.PsSpi;
         }
         if (!psApplyDeferred && (resync || psArmRising || s.PsAuto != _appliedPsAuto || s.PsSingle != _appliedPsSingle))
         {

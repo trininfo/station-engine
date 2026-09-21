@@ -592,6 +592,13 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
     private double _psMoxDelaySec = 0.2;
     private double _psLoopDelaySec = 0.0;
     private double _psAmpDelayNs = 150.0;
+    // FORK-LOCAL: Thetis PS-form switches. Seeded at TXA open, since a new
+    // channel's calcc starts from its own create_calcc defaults.
+    private bool _psPin = true;
+    private bool _psMap;
+    private bool _psStabilize;
+    private int _psInts = 16;
+    private int _psSpi = 256;
     private const int WdspPsDelayWholeSamplePositions = 9601;
     private const int PsFeedbackBlockSize = 1024;
     // PS feedback IQ sample rate. 192 kHz on every P2 path — the paired
@@ -2686,6 +2693,10 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                 _psAmpDelayNs = ClampPsAmpDelayNs(_psAmpDelayNs, _psFeedbackRateHz);
                 _ = NativeMethods.SetPSTXDelay(id, _psAmpDelayNs * 1e-9);
                 NativeMethods.SetPSHWPeak(id, _psHwPeak);
+                NativeMethods.SetPSPinMode(id, _psPin ? 1 : 0);
+                NativeMethods.SetPSMapMode(id, _psMap ? 1 : 0);
+                NativeMethods.SetPSStabilize(id, _psStabilize ? 1 : 0);
+                NativeMethods.SetPSIntsAndSpi(id, _psInts, _psSpi);
                 NativeMethods.SetPSControl(id, 1, 0, 0, 0);   // RESET state
                                                               // SetPSRunCal stays 0 until the operator arms PS.
                                                               // Bring-up diagnostic — drop once PS is confirmed stable on rack.
@@ -3797,6 +3808,36 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
             NativeMethods.SetPSControl(id, reset, mancal, automode, turnon);
         }
         _log.LogInformation("wdsp.setPsControl auto={Auto} single={Single}", autoCal, singleCal);
+    }
+
+    public void SetPsCalccSwitches(bool pin, bool map, bool stabilize, int ints, int spi)
+    {
+        if (_disposed != 0) return;
+        lock (_psLock)
+        {
+            _psPin = pin;
+            _psMap = map;
+            _psStabilize = stabilize;
+            // calcc ignores a layout whose product is not its collection
+            // size; mirror that so the seed never replays a refused value.
+            if (ints > 0 && spi > 0 && ints * spi == _psInts * _psSpi)
+            {
+                _psInts = ints;
+                _psSpi = spi;
+            }
+            int? txa;
+            lock (_txaLock) txa = _txaChannelId;
+            if (txa is int id)
+            {
+                NativeMethods.SetPSPinMode(id, pin ? 1 : 0);
+                NativeMethods.SetPSMapMode(id, map ? 1 : 0);
+                NativeMethods.SetPSStabilize(id, stabilize ? 1 : 0);
+                NativeMethods.SetPSIntsAndSpi(id, _psInts, _psSpi);
+            }
+        }
+        _log.LogInformation(
+            "wdsp.setPsCalccSwitches pin={Pin} map={Map} stbl={Stbl} ints={Ints} spi={Spi}",
+            pin, map, stabilize, _psInts, _psSpi);
     }
 
     public void SetPsAdvanced(double moxDelaySec, double loopDelaySec,

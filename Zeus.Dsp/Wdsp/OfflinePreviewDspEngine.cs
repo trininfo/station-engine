@@ -284,6 +284,9 @@ public sealed class OfflinePreviewDspEngine : IDspEngine, ITxAudioPluginHost
 
     public void SetPsHwPeak(double hwPeak) => _tx.SetPsHwPeak(hwPeak);
 
+    public void SetPsCalccSwitches(bool pin, bool map, bool stabilize, int ints, int spi) =>
+        _tx.SetPsCalccSwitches(pin, map, stabilize, ints, spi);
+
     public void FeedPsFeedbackBlock(
         ReadOnlySpan<float> txI,
         ReadOnlySpan<float> txQ,

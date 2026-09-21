@@ -877,6 +877,13 @@ public sealed class RadioService : IDisposable
             PsMoxDelaySec: PsTimingLimits.ClampMoxDelaySec(ps?.MoxDelaySec ?? PsTimingLimits.DefaultMoxDelaySec),
             PsLoopDelaySec: PsTimingLimits.ClampLoopDelaySec(ps?.LoopDelaySec ?? PsTimingLimits.DefaultLoopDelaySec),
             PsAmpDelayNs: PsTimingLimits.ClampAmpDelayNs(ps?.AmpDelayNs ?? PsTimingLimits.DefaultAmpDelayNs),
+            PsPinMode: ps?.PinMode ?? true,
+            PsMapMode: ps?.MapMode ?? false,
+            PsStabilize: ps?.Stabilize ?? false,
+            // A layout the calibrator would refuse falls back to the default
+            // rather than hydrating a value that never reaches WDSP.
+            PsInts: ps is not null && PsCalccLayout.IsAllowed(ps.Ints, ps.Spi) ? ps.Ints : PsCalccLayout.DefaultInts,
+            PsSpi: ps is not null && PsCalccLayout.IsAllowed(ps.Ints, ps.Spi) ? ps.Spi : PsCalccLayout.DefaultSpi,
             PsFeedbackSource: ps?.Source ?? PsFeedbackSource.Internal,
             // Two-tone test generator dial-in. Defaults match pihpsdr / Thetis
             // (700/1900 Hz, 0.49 each — peak ~0.98 just under WDSP IQ clip).
@@ -1107,6 +1114,11 @@ public sealed class RadioService : IDisposable
             MoxDelaySec = snap.PsMoxDelaySec,
             LoopDelaySec = snap.PsLoopDelaySec,
             AmpDelayNs = snap.PsAmpDelayNs,
+            PinMode = snap.PsPinMode,
+            MapMode = snap.PsMapMode,
+            Stabilize = snap.PsStabilize,
+            Ints = snap.PsInts,
+            Spi = snap.PsSpi,
             Source = snap.PsFeedbackSource,
             TwoToneFreq1 = snap.TwoToneFreq1,
             TwoToneFreq2 = snap.TwoToneFreq2,
@@ -6343,6 +6355,15 @@ public sealed class RadioService : IDisposable
                 ? PsTimingLimits.ClampAmpDelayNs(ampDelayNs)
                 : s.PsAmpDelayNs,
             PsHwPeak = req.HwPeak ?? s.PsHwPeak,
+            PsPinMode = req.PinMode ?? s.PsPinMode,
+            PsMapMode = req.MapMode ?? s.PsMapMode,
+            PsStabilize = req.Stabilize ?? s.PsStabilize,
+            // The endpoint requires Ints and Spi together and in
+            // PsCalccLayout.Allowed; internal callers get the same rule here.
+            PsInts = req.Ints is int ints && req.Spi is int spi && PsCalccLayout.IsAllowed(ints, spi)
+                ? ints : s.PsInts,
+            PsSpi = req.Ints is int ints2 && req.Spi is int spi2 && PsCalccLayout.IsAllowed(ints2, spi2)
+                ? spi2 : s.PsSpi,
         });
         // If the PS MOX hold-off just dropped, shrink the pre-key window so the
         // pre-key < PS-hold-off invariant holds regardless of setter ordering.

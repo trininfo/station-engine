@@ -1271,6 +1271,15 @@ public sealed record StateDto(
     // HardwareSpecific.PSDefaultPeak;` + clsHardwareSpecific.cs:303-328
     // PSDefaultPeak per-board switch.
     double PsHwPeakDefault = 0.4072,
+    // Thetis PureSignal-form switches (PIN / MAP / STBL / ints-spi), ported
+    // into the fork's calcc. Defaults leave the calibrator as it was: PIN on
+    // and STBL off as in Thetis; MAP OFF, where Thetis defaults it on,
+    // because the 2.10 calibrator never remapped. Persisted.
+    bool PsPinMode = true,
+    bool PsMapMode = false,
+    bool PsStabilize = false,
+    int PsInts = 16,
+    int PsSpi = 256,
     // PS TX feedback attenuation (dB) currently applied to the radio's
     // feedback path. Surfaced so the operator can set it directly — a manual
     // alternative to AutoAttenuate for a fixed external-tap chain — and see
@@ -2825,7 +2834,31 @@ public sealed record PsAdvancedSetRequest(
     double? MoxDelaySec = null,
     double? LoopDelaySec = null,
     double? AmpDelayNs = null,
-    double? HwPeak = null);
+    double? HwPeak = null,
+    // Thetis PureSignal-form switches, ported into the fork's calcc
+    // (SetPSPinMode / SetPSMapMode / SetPSStabilize / SetPSIntsAndSpi).
+    // Ints and Spi go together and must be one of PsCalccLayout.Allowed.
+    bool? PinMode = null,
+    bool? MapMode = null,
+    bool? Stabilize = null,
+    int? Ints = null,
+    int? Spi = null);
+
+/// <summary>
+/// calcc collection layouts Thetis offers (PSForm comboPSTint). Every one
+/// keeps ints*spi at 4096, the collection size GetPSDisp's buffers are
+/// sized to; the native setter ignores anything else.
+/// </summary>
+public static class PsCalccLayout
+{
+    public const int DefaultInts = 16;
+    public const int DefaultSpi = 256;
+
+    public static readonly (int Ints, int Spi)[] Allowed = [(16, 256), (8, 512), (4, 1024)];
+
+    public static bool IsAllowed(int ints, int spi) =>
+        Array.IndexOf(Allowed, (ints, spi)) >= 0;
+}
 
 public sealed record PsResetRequest();
 

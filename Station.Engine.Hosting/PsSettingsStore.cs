@@ -179,6 +179,14 @@ public sealed class PsSettingsEntry
     public double MoxDelaySec { get; set; } = 0.2;
     public double LoopDelaySec { get; set; } = 0.0;
     public double AmpDelayNs { get; set; } = 150.0;
+    // Thetis PureSignal-form switches ported into the fork's calcc. Defaults
+    // match StateDto's and leave the calibrator as it was; a store written
+    // before these existed reads back as those defaults.
+    public bool PinMode { get; set; } = true;
+    public bool MapMode { get; set; } = false;
+    public bool Stabilize { get; set; } = false;
+    public int Ints { get; set; } = PsCalccLayout.DefaultInts;
+    public int Spi { get; set; } = PsCalccLayout.DefaultSpi;
     // Feedback antenna source — Internal coupler (default) or External
     // (Bypass). Persisted so an operator who runs an external sniffer
     // doesn't have to re-pick it every session.

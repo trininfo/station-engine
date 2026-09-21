@@ -33,6 +33,10 @@ public static class PureSignalEndpoints
                 return Results.BadRequest(new { error = $"loopDelaySec must be {PsTimingLimits.MinLoopDelaySec:F0}..{PsTimingLimits.MaxLoopDelaySec:F0}" });
             if (req.AmpDelayNs is double amp && (amp < 0.0 || double.IsNaN(amp) || double.IsInfinity(amp)))
                 return Results.BadRequest(new { error = $"ampDelayNs must be 0..{PsTimingLimits.MaxAmpDelayNs:F0}" });
+            if ((req.Ints is null) != (req.Spi is null))
+                return Results.BadRequest(new { error = "ints and spi must be set together" });
+            if (req.Ints is int ints && req.Spi is int spi && !PsCalccLayout.IsAllowed(ints, spi))
+                return Results.BadRequest(new { error = "ints/spi must be 16/256, 8/512 or 4/1024" });
             log.LogInformation("api.tx.ps.advanced");
             return Results.Ok(r.SetPsAdvanced(req));
         });

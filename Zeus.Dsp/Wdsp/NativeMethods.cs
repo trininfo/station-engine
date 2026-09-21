@@ -1174,6 +1174,27 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetPSLoopDelay(int channel, double delay);
 
+    // FORK-LOCAL: Thetis's PureSignal-form switches, ported into calcc.c
+    // (native/wdsp, "Poseidon" blocks). Not in upstream Zeus's wdsp.dll: an
+    // unmodified engine binary throws EntryPointNotFound on first call.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSPinMode(int channel, int pin);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSMapMode(int channel, int map);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSStabilize(int channel, int stbl);
+
+    // ints * spi must equal the calcc collection size (4096) or the call is
+    // ignored natively; that is what keeps GetPSDisp's buffer contract.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSIntsAndSpi(int channel, int ints, int spi);
+
     // Returns the actual delay applied (clamped). pihpsdr stores the return.
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

@@ -207,6 +207,8 @@ internal sealed class ExternalProtocol3TxDspEngine : IDspEngine
     public void SetPsAdvanced(double moxDelaySec, double loopDelaySec, double ampDelayNs, double hwPeak)
     { if (PureSignalEnabled) _inner.SetPsAdvanced(moxDelaySec, loopDelaySec, ampDelayNs, hwPeak); }
     public void SetPsHwPeak(double hwPeak) { if (PureSignalEnabled) _inner.SetPsHwPeak(hwPeak); }
+    public void SetPsCalccSwitches(bool pin, bool map, bool stabilize, int ints, int spi)
+    { if (PureSignalEnabled) _inner.SetPsCalccSwitches(pin, map, stabilize, ints, spi); }
     public void FeedPsFeedbackBlock(
         ReadOnlySpan<float> txI,
         ReadOnlySpan<float> txQ,

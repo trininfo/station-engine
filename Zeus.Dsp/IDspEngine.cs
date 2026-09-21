@@ -475,6 +475,14 @@ public interface IDspEngine : IDisposable
     /// operator arms PS.</summary>
     void SetPsHwPeak(double hwPeak);
 
+    /// <summary>FORK-LOCAL. Thetis's PureSignal-form switches, ported into
+    /// the fork's calcc: PIN (pin the top of the gain curve), MAP (stratify
+    /// the collection by where feedback lands), STBL (average successive
+    /// collections) and the collection layout ints x spi. Defaulted to a
+    /// no-op so engines without a WDSP calcc behind them need not implement
+    /// it.</summary>
+    void SetPsCalccSwitches(bool pin, bool map, bool stabilize, int ints, int spi) { }
+
     /// <summary>Push one paired TX-mod-IQ + RX-feedback-IQ block into the
     /// WDSP <c>psccF</c> entry. Block size must match the value pihpsdr
     /// uses (1024 complex samples at 192 kHz). Caller owns the buffers; the
