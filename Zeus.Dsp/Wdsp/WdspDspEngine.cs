@@ -2826,6 +2826,16 @@ public sealed partial class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         {
             _moxOn = true;
             ReverbKeyEdge();                            // FORK: see WdspDspEngine.Reverb.cs
+            // The expander's look-ahead ring still holds the END of the last
+            // over. 60 ms of it plus WDSP's own latency outlasts TxService's
+            // 64 ms key-down prime, so without this the next over opened
+            // with ~45 ms of the previous one at full level. Rising edge
+            // only: on the falling edge the ring holds this over's last
+            // syllable, which the end-of-over hold still has to send.
+            lock (_dexpLock)
+            {
+                if (_dexpCreated && _dexpId >= 0) NativeMethods.flush_dexp(_dexpId);
+            }
             if (stopRxForPureSignal)
             {
                 rxaPrior = NativeMethods.SetChannelState(rxaId, 0, 1);
