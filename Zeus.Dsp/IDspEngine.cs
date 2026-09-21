@@ -533,6 +533,11 @@ public interface IDspEngine : IDisposable
     /// <summary>TX noise gate — WDSP's AMSQ stage on the mic.</summary>
     void SetTxGate(TxGateConfig cfg) { }
 
+    /// <summary>TX downward expander (WDSP's dexp) — what Thetis's TX
+    /// noise gate actually is. Runs on the mic ahead of TXA and ahead of
+    /// the TX audio plugin chain.</summary>
+    void SetTxDexp(TxDexpConfig cfg) { }
+
     /// <summary>Parametric TX equalizer — the Thetis WDSP port's
     /// SetTXAEQProfile with per-point Q. Shares the stage with
     /// <see cref="SetTxEq"/>; last writer wins.</summary>

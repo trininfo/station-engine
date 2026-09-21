@@ -67,6 +67,27 @@ public static class AudioSuiteEndpoints
             return Results.Ok(r.SetTxGate(cfg));
         });
 
+        // The TX downward expander — Thetis's TX noise gate. Values are in
+        // the units its panel shows (ms, dB); the conversion to WDSP's
+        // seconds and linear ratios happens at the engine seam, as in
+        // Thetis's own setup.cs.
+        endpoints.MapPost("/api/tx/dexp", (TxDexpSetRequest req, RadioService r) =>
+        {
+            if (req?.Config is not { } cfg)
+                return Results.BadRequest(new { error = "Config required" });
+            if (!cfg.IsWellFormed)
+                return Results.BadRequest(new
+                {
+                    error = "threshold -100..0 dB, times 0..5000 ms, ratio 0..60 dB, "
+                          + "hysteresis 0..20 dB, side-channel high cut above low cut, "
+                          + $"look-ahead 0..{TxDexpConfig.MaxLookAheadMs:F0} ms"
+                });
+            log.LogInformation(
+                "api.tx.dexp enabled={On} thresh={Thresh:F1}dB ratio={Ratio:F1}dB scf={Scf}",
+                cfg.Enabled, cfg.ThresholdDb, cfg.ExpansionRatioDb, cfg.SideChannelFilterEnabled);
+            return Results.Ok(r.SetTxDexp(cfg));
+        });
+
         /* ---- parametric (Q) profiles, from the Thetis WDSP port ------
          *
          * These and the ten-band routes above drive the SAME stages; the

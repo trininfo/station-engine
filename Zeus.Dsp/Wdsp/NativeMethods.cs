@@ -1188,6 +1188,105 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void GetPSMaxTX(int channel, out double maxtx);
 
+    /* ---- DEXP: the TX downward expander -----------------------------
+     *
+     * Thetis's TX noise gate. WDSP keeps instances in a global pdexp[4] and
+     * NOTHING creates one in this engine by default, so every setter below
+     * dereferences a null until create_dexp has run: they are only safe
+     * after WdspDspEngine has built the stage, which it does with the TXA
+     * channel.
+     *
+     * Buffers are WDSP's usual interleaved complex doubles, 2 per sample.
+     * Thetis passes the same pointer for in and out (processing in place)
+     * and so does the engine.
+     *
+     * Times are seconds and ratios are linear here; TxDexpConfig holds the
+     * milliseconds and dB an operator reads and converts at this seam, the
+     * same way Thetis's setup.cs does.
+     */
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void create_dexp(
+        int id, int run_dexp, int size, double* @in, double* @out, int rate,
+        double dettau, double tattack, double tdecay, double thold,
+        double exp_ratio, double hyst_ratio, double attack_thresh,
+        int nc, int wtype, double lowcut, double highcut,
+        int run_filt, int run_vox, int run_audelay, double audelay,
+        IntPtr pushvox,
+        int antivox_run, int antivox_size, int antivox_rate,
+        double antivox_gain, double antivox_tau);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void destroy_dexp(int id);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void flush_dexp(int id);
+
+    // Processes one block in place. Audio thread only.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void xdexp(int id);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPRun(int id, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPDetectorTau(int id, double tau);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPAttackTime(int id, double time);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPReleaseTime(int id, double time);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPHoldTime(int id, double time);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPExpansionRatio(int id, double ratio);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPHysteresisRatio(int id, double ratio);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPAttackThreshold(int id, double thresh);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPRunSideChannelFilter(int id, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPLowCut(int id, double lowcut);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPHighCut(int id, double highcut);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPRunAudioDelay(int id, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPAudioDelay(int id, double delay);
+
+    // Only meaningful with run_vox set, which this engine never does: VOX
+    // is a client-side decision here and the dead-man belongs with it.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDEXPRunVox(int id, int run);
+
     // calcc's display buffers — the AM/AM and AM/PM curves plus the sample
     // cloud they were fitted through (calcc.c:2282).
     //

@@ -645,6 +645,18 @@ public sealed class DspSettingsStore : IDisposable
         if (e.Id == 0) _entries.Insert(e); else _entries.Update(e);
     }
 
+    public TxDexpConfig? GetTxDexp(string profileId = "default") =>
+        ReadJson<TxDexpConfig>(
+            _entries.FindOne(x => x.ProfileId == profileId)?.TxDexpJson, _log, "TxDexp");
+
+    public void Upsert(TxDexpConfig config, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var e = _entries.FindOne(x => x.ProfileId == profileId) ?? new DspSettingsEntry { ProfileId = profileId };
+        e.TxDexpJson = System.Text.Json.JsonSerializer.Serialize(config, ParametricJson);
+        if (e.Id == 0) _entries.Insert(e); else _entries.Update(e);
+    }
+
     public TxGateConfig? GetTxGate(string profileId = "default")
     {
         var e = _entries.FindOne(x => x.ProfileId == profileId);
@@ -898,6 +910,7 @@ public sealed class DspSettingsEntry
     public string? TxEqParametricJson { get; set; }
     public string? RxEqParametricJson { get; set; }
     public string? CfcParametricJson { get; set; }
+    public string? TxDexpJson { get; set; }
     public bool? TxGateEnabled { get; set; }
     public double? TxGateThresholdDb { get; set; }
     public double? TxGateMutedGainDb { get; set; }

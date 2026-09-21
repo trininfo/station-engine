@@ -1439,6 +1439,9 @@ public class DspPipelineService : BackgroundService,
     private ParametricEqConfig? _appliedTxEqP;
     private ParametricEqConfig? _appliedRxEqP;
     private ParametricCfcConfig? _appliedCfcP;
+    // A record of scalars, so plain equality is the right comparison here —
+    // unlike the EQ configs, which hold arrays.
+    private TxDexpConfig _appliedTxDexp = TxDexpConfig.Default;
 
     // RX front-end (step attenuator + Mercury preamp). Mirrored to a live
     // Protocol2Client when the value moves; on P1 these go through
@@ -6229,6 +6232,13 @@ public class DspPipelineService : BackgroundService,
         {
             engine.SetCfcParametric(cfcP);
             _appliedCfcP = cfcP;
+        }
+
+        var txDexp = s.TxDexp ?? TxDexpConfig.Default;
+        if (resync || txDexp != _appliedTxDexp)
+        {
+            engine.SetTxDexp(txDexp);
+            _appliedTxDexp = txDexp;
         }
 
         var txGate = s.TxGate ?? TxGateConfig.Default;

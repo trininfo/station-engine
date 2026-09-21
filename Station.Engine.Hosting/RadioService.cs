@@ -639,6 +639,7 @@ public sealed class RadioService : IDisposable
         var persistedTxEqP = _dspSettingsStore.GetTxEqParametric();
         var persistedRxEqP = _dspSettingsStore.GetRxEqParametric();
         var persistedCfcP = _dspSettingsStore.GetCfcParametric();
+        var persistedDexp = _dspSettingsStore.GetTxDexp() ?? TxDexpConfig.Default;
         // AGC mode + custom params. Null on a fresh install / legacy DB row
         // falls back to the Med default so first-connect behaviour is unchanged.
         var persistedAgc = NormalizeAgcConfig(
@@ -889,6 +890,7 @@ public sealed class RadioService : IDisposable
             TxEqParametric: persistedTxEqP,
             RxEqParametric: persistedRxEqP,
             CfcParametric: persistedCfcP,
+            TxDexp: persistedDexp,
             // Hydrate drive sliders from RadioStateStore so a fresh frontend
             // connect lands on the operator's last-set values. The private
             // fields above (_drivePct / _tunePct) were already hydrated in the
@@ -6222,6 +6224,19 @@ public sealed class RadioService : IDisposable
         _log.LogInformation(
             "radio.setTxGate enabled={On} thresh={Thresh:F1}dB",
             cfg.Enabled, cfg.ThresholdDb);
+        return Snapshot();
+    }
+
+    public StateDto SetTxDexp(TxDexpConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!cfg.IsWellFormed)
+            throw new ArgumentException("expander config out of range", nameof(cfg));
+        Mutate(s => s with { TxDexp = cfg });
+        _dspSettingsStore.Upsert(cfg);
+        _log.LogInformation(
+            "radio.setTxDexp enabled={On} thresh={Thresh:F1}dB ratio={Ratio:F1}dB",
+            cfg.Enabled, cfg.ThresholdDb, cfg.ExpansionRatioDb);
         return Snapshot();
     }
 

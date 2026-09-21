@@ -554,6 +554,25 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
     // thread writing a profile, so every entry point that touches those
     // arrays (both profile setters and both draw getters) takes this first.
     private readonly object _eqLock = new();
+
+    /* ---- DEXP, the TX downward expander -----------------------------
+     *
+     * WDSP holds these in a global pdexp[] and creates none by itself, so
+     * the engine owns the one TX instance: its buffer, its lifetime and the
+     * lock that keeps the audio thread away from create/destroy. Every
+     * SetDEXP* setter dereferences pdexp[id] with no null check, so nothing
+     * may be pushed before _dexpCreated.
+     */
+    private const int DexpId = 0;
+    private readonly object _dexpLock = new();
+    private unsafe double* _dexpBuf;          // interleaved complex, _dexpSize samples
+    private bool _dexpCreated;
+    private int _dexpSize;
+    private int _dexpRateHz;
+    private TxDexpConfig _dexpConfig = TxDexpConfig.Default;
+    // Read on the audio thread before taking the lock at all, so a disabled
+    // expander costs one volatile read per block.
+    private volatile bool _dexpActive;
     private volatile bool _psEnabled;
     private bool _psAuto = true;
     private bool _psSingle;
@@ -2700,6 +2719,19 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                     id, _txaInputRateHz, _txaDspRateHz, _txaOutputRateHz,
                     _txaInSize, _txaOutSize, _txaCfirRun ? 1 : 0, DefaultLevelerMaxGainDb,
                     _txDispAlive ? "on" : "off", _txDispPixelWidth, _txDispRxSampleRateHz, _txaOutputRateHz, _txDispZoomLevel);
+
+                // The expander's block size and rate come from the TX
+                // channel, so a re-open with a different profile has to
+                // rebuild it. No-op when nothing has changed.
+                lock (_dexpLock)
+                {
+                    EnsureDexpLocked(_txaInSize, _txaInputRateHz);
+                    if (_dexpCreated)
+                    {
+                        ApplyDexpLocked(_dexpConfig);
+                        _dexpActive = _dexpConfig.Enabled;
+                    }
+                }
                 return id;
             }
             catch
@@ -4498,6 +4530,137 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
             cfg.Compression.GlobalGainDb, cfg.PostEq.GlobalGainDb);
     }
 
+    /// <summary>
+    /// TX downward expander — Thetis's TX noise gate, on the mic ahead of
+    /// TXA (and ahead of the TX audio plugin chain, so an effect there keeps
+    /// its tail rather than being expanded away).
+    /// </summary>
+    public void SetTxDexp(TxDexpConfig cfg)
+    {
+        if (_disposed != 0 || cfg is null) return;
+        lock (_dexpLock)
+        {
+            _dexpConfig = cfg;
+            EnsureDexpLocked(_txaInSize, _txaInputRateHz);
+            if (!_dexpCreated) { _dexpActive = false; return; }
+            ApplyDexpLocked(cfg);
+            _dexpActive = cfg.Enabled;
+        }
+        _log.LogInformation(
+            "wdsp.txDexp run={Run} thresh={Thresh:F1}dB attack={A:F0}ms hold={H:F0}ms " +
+            "release={R:F0}ms ratio={Ratio:F1}dB hyst={Hyst:F1}dB scf={Scf} look={Look}",
+            cfg.Enabled, cfg.ThresholdDb, cfg.AttackMs, cfg.HoldMs, cfg.ReleaseMs,
+            cfg.ExpansionRatioDb, cfg.HysteresisRatioDb,
+            cfg.SideChannelFilterEnabled, cfg.LookAheadEnabled);
+    }
+
+    /// <summary>Build the stage, or rebuild it when the TX block size or
+    /// rate has changed under it. Allocates — control thread only.</summary>
+    private unsafe void EnsureDexpLocked(int size, int rateHz)
+    {
+        if (size <= 0 || rateHz <= 0) return;
+        if (_dexpCreated && _dexpSize == size && _dexpRateHz == rateHz) return;
+
+        DestroyDexpLocked();
+
+        // WDSP's buffers are interleaved complex doubles and it keeps the
+        // pointer, so this is unmanaged and lives until destroy_dexp.
+        nuint bytes = (nuint)(size * 2 * sizeof(double));
+        _dexpBuf = (double*)NativeMemory.AlignedAlloc(bytes, 64);
+        NativeMemory.Fill(_dexpBuf, bytes, 0);
+
+        var c = _dexpConfig;
+        NativeMethods.create_dexp(
+            DexpId,
+            0,                              // start stopped; SetDEXPRun follows
+            size,
+            _dexpBuf, _dexpBuf,             // in place, as ChannelMaster does
+            rateHz,
+            c.DetectorTauSec, c.AttackSec, c.ReleaseSec, c.HoldSec,
+            c.ExpansionRatioLinear, c.HysteresisRatioLinear, c.ThresholdLinear,
+            256,                            // side-channel filter taps (Thetis's)
+            0,                              // BH-4 window (Thetis's)
+            c.SideChannelLowCutHz, c.SideChannelHighCutHz,
+            c.SideChannelFilterEnabled ? 1 : 0,
+            0,                              // run_vox: VOX is the client's job here
+            c.LookAheadEnabled ? 1 : 0,
+            c.LookAheadSec,
+            IntPtr.Zero,                    // no VOX callback; only read when run_vox
+            0,                              // anti-vox off
+            size, rateHz,                   // ...but its buffer must still be sane
+            0.01, 0.01);
+
+        _dexpCreated = true;
+        _dexpSize = size;
+        _dexpRateHz = rateHz;
+        _log.LogInformation("wdsp.txDexp created size={Size} rate={Rate}", size, rateHz);
+    }
+
+    private void ApplyDexpLocked(TxDexpConfig c)
+    {
+        NativeMethods.SetDEXPDetectorTau(DexpId, c.DetectorTauSec);
+        NativeMethods.SetDEXPAttackTime(DexpId, c.AttackSec);
+        NativeMethods.SetDEXPReleaseTime(DexpId, c.ReleaseSec);
+        NativeMethods.SetDEXPHoldTime(DexpId, c.HoldSec);
+        NativeMethods.SetDEXPExpansionRatio(DexpId, c.ExpansionRatioLinear);
+        NativeMethods.SetDEXPHysteresisRatio(DexpId, c.HysteresisRatioLinear);
+        NativeMethods.SetDEXPAttackThreshold(DexpId, c.ThresholdLinear);
+        NativeMethods.SetDEXPLowCut(DexpId, c.SideChannelLowCutHz);
+        NativeMethods.SetDEXPHighCut(DexpId, c.SideChannelHighCutHz);
+        NativeMethods.SetDEXPRunSideChannelFilter(DexpId, c.SideChannelFilterEnabled ? 1 : 0);
+        NativeMethods.SetDEXPAudioDelay(DexpId, c.LookAheadSec);
+        NativeMethods.SetDEXPRunAudioDelay(DexpId, c.LookAheadEnabled ? 1 : 0);
+        NativeMethods.SetDEXPRunVox(DexpId, 0);
+        // Run last, for the same reason the EQ and gate set parameters
+        // first: otherwise a block goes through the stage as it was.
+        NativeMethods.SetDEXPRun(DexpId, c.Enabled ? 1 : 0);
+    }
+
+    private unsafe void DestroyDexpLocked()
+    {
+        if (_dexpCreated)
+        {
+            NativeMethods.SetDEXPRun(DexpId, 0);
+            NativeMethods.destroy_dexp(DexpId);
+            _dexpCreated = false;
+        }
+        if (_dexpBuf != null)
+        {
+            NativeMemory.AlignedFree(_dexpBuf);
+            _dexpBuf = null;
+        }
+        _dexpSize = 0;
+        _dexpRateHz = 0;
+        _dexpActive = false;
+    }
+
+    /// <summary>
+    /// Run the expander over one mic block. Audio thread.
+    /// </summary>
+    /// <remarks>
+    /// Takes _dexpLock, which the audio thread would normally avoid — but
+    /// the alternative is racing destroy_dexp, and the lock is uncontended
+    /// except on the rare control-thread reconfigure. The volatile
+    /// _dexpActive read above it means a disabled expander never gets here.
+    /// </remarks>
+    private unsafe bool TryRunDexp(ReadOnlySpan<float> mic, Span<float> dst, int inSize)
+    {
+        if (!_dexpActive) return false;
+        lock (_dexpLock)
+        {
+            if (!_dexpCreated || _dexpBuf == null || _dexpSize != inSize) return false;
+            double* b = _dexpBuf;
+            for (int i = 0; i < inSize; i++)
+            {
+                b[2 * i + 0] = mic[i];
+                b[2 * i + 1] = 0.0;
+            }
+            NativeMethods.xdexp(DexpId);
+            for (int i = 0; i < inSize; i++) dst[i] = (float)b[2 * i + 0];
+        }
+        return true;
+    }
+
     public bool TryGetEqDraw(bool transmit, int channelId, Span<double> x, Span<double> y)
     {
         if (_disposed != 0) return false;
@@ -4580,23 +4743,30 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         // the configured TXA input block size; output buffer is iin, which
         // fexchange2 consumes directly. Bit-identical to "no plugins" when
         // the handler is null or digitally bypassed.
+        // The expander runs FIRST, on the raw mic — the seam Thetis's
+        // ChannelMaster uses. Ahead of the plugin chain on purpose: a reverb
+        // added there would otherwise have its tail expanded away by a gate
+        // sitting downstream of it.
+        Span<float> dexped = stackalloc float[inSize];
+        ReadOnlySpan<float> micStage = TryRunDexp(micMono, dexped, inSize) ? dexped : micMono;
+
         var pluginHandler = skipTxAudioPlugins ? null : _txAudioPluginHandler;
         if (pluginHandler is null)
         {
-            micMono.CopyTo(iin);
+            micStage.CopyTo(iin);
         }
         else
         {
             try
             {
-                pluginHandler(micMono, iin, inSize, channels: 1, sampleRate: _txaInputRateHz);
+                pluginHandler(micStage, iin, inSize, channels: 1, sampleRate: _txaInputRateHz);
             }
             catch (Exception ex)
             {
                 // Audio thread: never throw upward. Degrade to pass-through.
                 // The handler should never throw, but a buggy plugin or a
                 // wrapper bug shouldn't take down TX.
-                micMono.CopyTo(iin);
+                micStage.CopyTo(iin);
                 if (++_txPluginErrLogged <= 4)
                     _log.LogWarning(ex, "wdsp.tx-plugin handler threw (suppressed after 4)");
             }
@@ -4824,6 +4994,9 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                         ReleaseNativeSlot(txa);
                     _txaChannelId = null;
                     _txaNativeOwned = false;
+                    // The expander outlives the TXA channel otherwise: WDSP
+                    // keeps it in a global, and its buffer is ours to free.
+                    lock (_dexpLock) DestroyDexpLocked();
                 }
             }
         }
