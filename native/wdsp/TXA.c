@@ -203,27 +203,29 @@ void create_txa (int channel)
 	double default_G[5] = {0.0, 5.0, 10.0, 10.0, 5.0};
 	double default_E[5] = {7.0, 7.0, 7.0, 7.0, 7.0};
 	txa[channel].cfcomp.p = create_cfcomp(
+		// FORK: Thetis's CFC (ported from ramdor/Thetis). One frequency set
+		// shared by the compression and post-EQ curves, and a 2048-point FFT
+		// -- the engine's NURBS CFC used max(16384, dsp_size). FFT size sets
+		// the CFC's frequency and time resolution, so it is part of the sound.
 		0,											// run
 		0,											// position
 		0,											// post-equalizer run
 		ch[channel].dsp_size,						// size
 		txa[channel].midbuff,						// input buffer
 		txa[channel].midbuff,						// output buffer
-		max(16384, ch[channel].dsp_size),			// fft size
+		2048,										// fft size
 		4,											// overlap
 		ch[channel].dsp_rate,						// samplerate
 		1,											// window type
 		0,											// compression method
-		5,											// nfreqsG
-		5,                                          // nfreqsE
+		5,											// nfreqs
 		0.0,										// pre-compression
 		0.0,										// pre-postequalization
-		default_F,									// compressor frequency array
+		default_F,									// frequency array
 		default_G,									// compression array
-		default_F,									// post-eq frequency array
 		default_E,									// eq array
 		0.25,										// metering time constant
-		0.50);										// display time constant
+		0.50);										// display time constant										// display time constant
 	}
 
 	txa[channel].cfcmeter.p = create_meter (

@@ -1,8 +1,14 @@
+/*  PORTED from ramdor/Thetis (Project Files/Source/wdsp/eq.h) into the
+    trininfo/station-engine fork, so the parametric (Q) EQ and CFC Thetis
+    builds its TX profiles on can be driven identically. Engine-side
+    adaptations are marked FORK. GPL-2.0-or-later, as the original.
+*/
+
 /*  eq.h
 
 This file is part of a program that implements a Software-Defined Radio.
 
-Copyright (C) 2013, 2016, 2026 Warren Pratt, NR0V
+Copyright (C) 2013, 2016 Warren Pratt, NR0V
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -20,7 +26,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 The author can be reached by email at  
 
-warren@pratt.one
+warren@wpratt.com
 
 */
 
@@ -33,17 +39,6 @@ warren@pratt.one
 #ifndef _eqp_h
 #define _eqp_h
 #include "firmin.h"
-#include "nurbs.h"
-
-#define EQ_MAXIMUM_CONTROL_POINTS                                  256
-#define EQ_MAXIMUM_COEFFICIENTS                                  16384
-#define EQ_MAXIMUM_DEGREE                                           16
-#define EQ_MAXIMUM_U_VALUES                                       1024
-#define EQ_MAXIMUM_FPTS              (EQ_MAXIMUM_COEFFICIENTS / 2 + 1)
-
-// forward definitions
-typedef struct _eqimp* EQIMP;
-
 typedef struct _eqp
 {
 	int run;
@@ -53,26 +48,16 @@ typedef struct _eqp
 	double* in;
 	double* out;
 	int nfreqs;
-	int max_freqs;
 	double* F;
 	double* G;
+	double* Q;
 	int ctfmode;
 	int wintype;
 	double samplerate;
-	EQIMP peqimp;
-	double* impulse;
 	FIRCORE p;
-	int deg;
-	CRITICAL_SECTION csEQ;
 } eqp, *EQP;
 
-extern EQIMP create_eqimp(int nfreqs, int nc, int wintype, int max_freqs);
-
-extern void destroy_eqimp (EQIMP a);
-
-extern void eq_impulse(EQIMP a, int N, int nfreqs, double* F, double* G,
-	double samplerate, double scale, int ctfmode, int wintype, int deg,
-	double* impulse);
+extern double* eq_impulse (int N, int nfreqs, double* F, double* G, double* Q, double samplerate, double scale, int ctfmode, int wintype);
 
 extern EQP create_eqp (int run, int size, int nc, int mp, double *in, double *out, 
 	int nfreqs, double* F, double* G, int ctfmode, int wintype, int samplerate);
@@ -89,13 +74,13 @@ extern void setSamplerate_eqp (EQP a, int rate);
 
 extern void setSize_eqp (EQP a, int size);
 
-PORT void SetRXAEQNC (int channel, int nc);
+__declspec (dllexport) void SetRXAEQNC (int channel, int nc);
 
-PORT void SetRXAEQMP (int channel, int mp);
+__declspec (dllexport) void SetRXAEQMP (int channel, int mp);
 
-PORT void SetTXAEQNC (int channel, int nc);
+__declspec (dllexport) void SetTXAEQNC (int channel, int nc);
 
-PORT void SetTXAEQMP (int channel, int mp);
+__declspec (dllexport) void SetTXAEQMP (int channel, int mp);
 
 #endif
 
@@ -119,6 +104,7 @@ typedef struct _eq
 	int nfreqs;
 	double* F;
 	double* G;
+	double* Q;
 	double* infilt;
 	double* product;
 	double* mults;
@@ -128,16 +114,15 @@ typedef struct _eq
 	double samplerate;
 	fftw_plan CFor;
 	fftw_plan CRev;
-	int deg;
-	EQIMP peqimp;
-	double* impulse;
 }eq, *EQ;
 
-extern double* eq_mults(EQIMP peqimp, int size, int nfreqs, double* F, double* G, double samplerate,
-	double scale, int ctfmode, int wintype, int deg, double* impulse);
+// FORK: Thetis declares this without Q, but defines it with one (eq.c).
+// Every compiled caller passes Q; the only 8-argument calls sit in a
+// commented-out legacy block. Declared to match the definition so a
+// future caller cannot shift samplerate into the Q pointer.
+extern double* eq_mults (int size, int nfreqs, double* F, double* G, double* Q, double samplerate, double scale, int ctfmode, int wintype);
 
-extern EQ create_eq (int run, int size, double *in, double *out, int nfreqs, 
-	double* F, double* G, int ctfmode, int wintype, int samplerate);
+extern EQ create_eq (int run, int size, double *in, double *out, int nfreqs, double* F, double* G, int ctfmode, int wintype, int samplerate);
 
 extern void destroy_eq (EQ a);
 

@@ -40,11 +40,15 @@ void calc_fmsq (FMSQ a)
 	a->G[1] = 0.0;
 	a->G[2] = 3.0;
 	a->G[3] = +20.0 * log10(20000.0 / *a->pllpole);
-	a->peqimp = create_eqimp (3, a->nc, 2, 16);
-	a->impulse = (double*) malloc0 (a->nc * sizeof (complex));
-	eq_impulse (a->peqimp, a->nc, 3, a->F, a->G, a->rate, 1.0 / (2.0 * a->size), 0, 0, 0, 
-		a->impulse);
-	a->p = create_fircore (a->size, a->trigger, a->noise, a->nc, a->mp, 4, a->impulse);
+	// FORK: Thetis's eq_impulse returns the impulse (NULL Q = the classic
+	// non-parametric design) rather than filling an EQIMP -- the same call
+	// Thetis's own fmsq.c makes. The engine's fircore keeps its partition
+	// factor of 4.
+	{
+		double* impulse = eq_impulse (a->nc, 3, a->F, a->G, NULL, a->rate, 1.0 / (2.0 * a->size), 0, 0);
+		a->p = create_fircore (a->size, a->trigger, a->noise, a->nc, a->mp, 4, impulse);
+		_aligned_free (impulse);
+	}
 	// noise averaging
 	a->avm = exp(-1.0 / (a->rate * a->avtau));
 	a->onem_avm = 1.0 - a->avm;
@@ -82,9 +86,7 @@ void decalc_fmsq (FMSQ a)
 {
 	_aligned_free(a->cdown);
 	_aligned_free(a->cup);
-	_aligned_free(a->impulse);
 	destroy_fircore (a->p);
-	destroy_eqimp(a->peqimp);
 	_aligned_free(a->noise);
 }
 
@@ -261,13 +263,12 @@ void SetRXAFMSQNC (int channel, int nc)
 	if (a->nc != nc)
 	{
 		a->nc = nc;
-		destroy_eqimp(a->peqimp);
-		_aligned_free(a->impulse);
-		a->impulse = (double*)malloc0(a->nc * sizeof(complex));
-		a->peqimp = create_eqimp(3, a->nc, 2, 16);
-		eq_impulse(a->peqimp, a->nc, 3, a->F, a->G, a->rate, 1.0 / (2.0 * a->size), 0, 0, 0,
-			a->impulse);
-		setNc_fircore (a->p, a->nc, a->impulse);
+		// FORK: see create_fmsq.
+		{
+			double* impulse = eq_impulse (a->nc, 3, a->F, a->G, NULL, a->rate, 1.0 / (2.0 * a->size), 0, 0);
+			setNc_fircore (a->p, a->nc, impulse);
+			_aligned_free (impulse);
+		}
 	}
 	LeaveCriticalSection (&ch[channel].csDSP);
 }

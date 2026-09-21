@@ -69,8 +69,6 @@ typedef struct _fmsq
 	int nc;
 	int mp;
 	FIRCORE p;
-	EQIMP peqimp;
-	double* impulse;
 } fmsq, *FMSQ;
 
 extern FMSQ create_fmsq (int run, int size, double* insig, double* outsig, double* trigger, int rate, double fc, 
