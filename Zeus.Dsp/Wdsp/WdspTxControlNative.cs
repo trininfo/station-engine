@@ -10,7 +10,8 @@ internal interface IWdspTxControlNative
     void SetTXAosctrlRun(int channel, int run);
     void SetTXAosctrlBandwidth(int channel, double bandwidth);
     void SetTXACFCOMPRun(int channel, int run);
-    void SetTXACFCOMPprofile(int channel, int nfreqs, double[] f, double[] g, double[] e);
+    void SetTXACFCOMPprofile(int channel, int nfreqs, double[] f, double[] g, double[] e,
+                             double[]? qg, double[]? qe);
     void SetTXACFCOMPPrecomp(int channel, double precomp);
     void SetTXACFCOMPPrePeq(int channel, double prepeq);
     void SetTXACFCOMPPeqRun(int channel, int run);
@@ -46,13 +47,14 @@ internal sealed class WdspTxControlNative : IWdspTxControlNative
     public void SetTXACFCOMPRun(int channel, int run) =>
         NativeMethods.SetTXACFCOMPRun(channel, run);
 
-    public unsafe void SetTXACFCOMPprofile(int channel, int nfreqs, double[] f, double[] g, double[] e)
+    public unsafe void SetTXACFCOMPprofile(int channel, int nfreqs, double[] f, double[] g, double[] e,
+                                          double[]? qg, double[]? qe)
     {
-        fixed (double* pF = f, pG = g, pE = e)
+        // `fixed` on a null array yields a null pointer, which is precisely
+        // the "no Q factors" profile Thetis sends with its Q switch off.
+        fixed (double* pF = f, pG = g, pE = e, pQg = qg, pQe = qe)
         {
-            NativeMethods.SetTXACFCOMPprofile(
-                channel, nfreqs,
-                ref *pF, ref *pG, ref *pE);
+            NativeMethods.SetTXACFCOMPprofile(channel, nfreqs, pF, pG, pE, pQg, pQe);
         }
     }
 

@@ -1436,6 +1436,9 @@ public class DspPipelineService : BackgroundService,
     private GraphicEqConfig _appliedTxEq = GraphicEqConfig.Default;
     private GraphicEqConfig _appliedRxEq = GraphicEqConfig.Default;
     private TxGateConfig _appliedTxGate = TxGateConfig.Default;
+    private ParametricEqConfig? _appliedTxEqP;
+    private ParametricEqConfig? _appliedRxEqP;
+    private ParametricCfcConfig? _appliedCfcP;
 
     // RX front-end (step attenuator + Mercury preamp). Mirrored to a live
     // Protocol2Client when the value moves; on P1 these go through
@@ -6205,6 +6208,27 @@ public class DspPipelineService : BackgroundService,
             engine.SetRxEq(channel, rxEq);
             if (rx2Channel >= 0) engine.SetRxEq(rx2Channel, rxEq);
             _appliedRxEq = rxEq;
+        }
+
+        // Parametric profiles drive the same stages as the ten-band ones,
+        // so they are applied AFTER: with both set, the parametric curve is
+        // the one that survives, which is what an operator who has imported
+        // a Thetis profile expects. Null means never set — nothing pushed.
+        if (s.TxEqParametric is { } txEqP && (resync || !txEqP.ValueEquals(_appliedTxEqP)))
+        {
+            engine.SetTxEqParametric(txEqP);
+            _appliedTxEqP = txEqP;
+        }
+        if (s.RxEqParametric is { } rxEqP && (resync || !rxEqP.ValueEquals(_appliedRxEqP)))
+        {
+            engine.SetRxEqParametric(channel, rxEqP);
+            if (rx2Channel >= 0) engine.SetRxEqParametric(rx2Channel, rxEqP);
+            _appliedRxEqP = rxEqP;
+        }
+        if (s.CfcParametric is { } cfcP && (resync || !cfcP.ValueEquals(_appliedCfcP)))
+        {
+            engine.SetCfcParametric(cfcP);
+            _appliedCfcP = cfcP;
         }
 
         var txGate = s.TxGate ?? TxGateConfig.Default;

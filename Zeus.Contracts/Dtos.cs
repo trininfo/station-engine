@@ -1313,6 +1313,13 @@ public sealed record StateDto(
     GraphicEqConfig? TxEq = null,
     GraphicEqConfig? RxEq = null,
     TxGateConfig? TxGate = null,
+    // Parametric (Q) profiles from the Thetis WDSP port. These and the
+    // ten-band fields above drive the SAME stages — whichever was set last
+    // is what runs — so a client should show one editor or the other, not
+    // both at once. Null means "never set", not "flat".
+    ParametricEqConfig? TxEqParametric = null,
+    ParametricEqConfig? RxEqParametric = null,
+    ParametricCfcConfig? CfcParametric = null,
 
     // ---- Drive slider state ----
     // Operator drive slider position 0..100 (% of MaxPowerWatts via the

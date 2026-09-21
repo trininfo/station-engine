@@ -533,6 +533,18 @@ public interface IDspEngine : IDisposable
     /// <summary>TX noise gate — WDSP's AMSQ stage on the mic.</summary>
     void SetTxGate(TxGateConfig cfg) { }
 
+    /// <summary>Parametric TX equalizer — the Thetis WDSP port's
+    /// SetTXAEQProfile with per-point Q. Shares the stage with
+    /// <see cref="SetTxEq"/>; last writer wins.</summary>
+    void SetTxEqParametric(ParametricEqConfig cfg) { }
+
+    /// <summary>Parametric RX equalizer for one receiver channel.</summary>
+    void SetRxEqParametric(int channelId, ParametricEqConfig cfg) { }
+
+    /// <summary>Parametric CFC — compression and post-EQ curves with Q,
+    /// as Thetis's CFC form drives them.</summary>
+    void SetCfcParametric(ParametricCfcConfig cfg) { }
+
     /// <summary>The equalizer response curve WDSP built, for plotting:
     /// <paramref name="x"/> in Hz and <paramref name="y"/> in dB, both
     /// <see cref="GraphicEqConfig.DrawPoints"/> long. False when there is no channel

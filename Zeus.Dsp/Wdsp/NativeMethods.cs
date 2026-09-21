@@ -865,17 +865,25 @@ internal static partial class NativeMethods
 
     // CFC (Continuous Frequency Compressor — multi-band frequency-domain
     // compressor sitting in xtxa between xeqp and xbandpass). Issue #123.
-    // SetTXACFCOMPprofile takes parallel arrays F[], G[], E[] (frequency Hz,
-    // compression dB, post-EQ gain dB). The caller pins F/G/E with `fixed`
-    // blocks and passes them via `ref *pF`.
+    //
+    // Parallel arrays F[], G[], E[] (frequency Hz, compression dB, post-EQ
+    // gain dB) plus, since the Thetis EQ/CFC port, Qg[] and Qe[] — the per
+    // point Q of the compression and post-EQ curves. Pass Qg/Qe null for the
+    // classic non-parametric profile, which is exactly what Thetis does when
+    // its Q factors are switched off.
+    //
+    // Pointers rather than `ref double`, because null is a meaningful value
+    // here and `ref` cannot express it.
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial void SetTXACFCOMPprofile(
+    internal static unsafe partial void SetTXACFCOMPprofile(
         int channel,
         int nfreqs,
-        ref double F,
-        ref double G,
-        ref double E);
+        double* F,
+        double* G,
+        double* E,
+        double* Qg,
+        double* Qe);
 
     // Frequency-independent pre-compressor gain (dB).
     [LibraryImport(LibraryName)]
@@ -963,6 +971,28 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static unsafe partial void SetTXAGrphEQ10(int channel, int* txeq);
+
+    // Parametric equalizer profile — the call Thetis's EQ form makes, and
+    // the only way to reproduce a Thetis TX profile.
+    //
+    // F/G/Q are nfreqs+1 long. Element [0] is NOT a band: F[0]=0, G[0] is the
+    // preamp (Thetis's "global gain"), Q[0]=0; the points follow in [1..n].
+    // Q null selects the classic design, where the points are spline control
+    // points instead of filter centres.
+    //
+    // NOT THREAD-SAFE on the native side: this frees and reallocates the
+    // stage's F/G/Q with no lock (as in Thetis, where one UI thread owns
+    // every call). Callers must serialise it against GetXXAEQDraw, which
+    // reads those same arrays. WdspDspEngine does that with _eqLock.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void SetTXAEQProfile(
+        int channel, int nfreqs, double* F, double* G, double* Q);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void SetRXAEQProfile(
+        int channel, int nfreqs, double* F, double* G, double* Q);
 
     // The response curve WDSP actually built, for plotting. Same buffer
     // hazard as GetPSDisp: it memcpys `upts` doubles into X and Y and never

@@ -67,6 +67,55 @@ public static class AudioSuiteEndpoints
             return Results.Ok(r.SetTxGate(cfg));
         });
 
+        /* ---- parametric (Q) profiles, from the Thetis WDSP port ------
+         *
+         * These and the ten-band routes above drive the SAME stages; the
+         * last write wins. A client should offer one editor or the other.
+         */
+
+        endpoints.MapPost("/api/tx/eq/parametric", (ParametricEqSetRequest req, RadioService r) =>
+        {
+            if (req?.Config is not { } cfg)
+                return Results.BadRequest(new { error = "Config required" });
+            if (!cfg.IsWellFormed)
+                return Results.BadRequest(new { error = ParametricError(cfg) });
+            log.LogInformation(
+                "api.tx.eq.parametric enabled={On} points={N} preamp={Preamp:F1}dB",
+                cfg.Enabled, cfg.Points.Length, cfg.GlobalGainDb);
+            return Results.Ok(r.SetTxEqParametric(cfg));
+        });
+
+        endpoints.MapPost("/api/rx/eq/parametric", (ParametricEqSetRequest req, RadioService r) =>
+        {
+            if (req?.Config is not { } cfg)
+                return Results.BadRequest(new { error = "Config required" });
+            if (!cfg.IsWellFormed)
+                return Results.BadRequest(new { error = ParametricError(cfg) });
+            log.LogInformation(
+                "api.rx.eq.parametric enabled={On} points={N}", cfg.Enabled, cfg.Points.Length);
+            return Results.Ok(r.SetRxEqParametric(cfg));
+        });
+
+        endpoints.MapPost("/api/tx/cfc/parametric", (ParametricCfcSetRequest req, RadioService r) =>
+        {
+            if (req?.Config is not { } cfg)
+                return Results.BadRequest(new { error = "Config required" });
+            if (cfg.Compression is null || cfg.PostEq is null)
+                return Results.BadRequest(new { error = "both Compression and PostEq curves are required" });
+            if (cfg.Compression.Points.Length != cfg.PostEq.Points.Length)
+                return Results.BadRequest(new
+                {
+                    error = "the compression and post-EQ curves must have the same number of points — "
+                          + "the native profile takes one shared frequency set"
+                });
+            if (!cfg.IsWellFormed)
+                return Results.BadRequest(new { error = ParametricError(cfg.Compression) });
+            log.LogInformation(
+                "api.tx.cfc.parametric enabled={On} peq={Peq} points={N}",
+                cfg.Enabled, cfg.PostEqEnabled, cfg.Compression.Points.Length);
+            return Results.Ok(r.SetCfcParametric(cfg));
+        });
+
         // The response curve WDSP built for the stage, so the panel plots
         // what is actually running rather than redrawing the sliders as a
         // curve. Returns 503 rather than an empty array when there is no
@@ -90,6 +139,11 @@ public static class AudioSuiteEndpoints
         }));
 
         return endpoints;
+
+        static string ParametricError(ParametricEqConfig cfg) =>
+            cfg.Points is null || cfg.Points.Length > ParametricEqConfig.MaxPoints
+                ? $"at most {ParametricEqConfig.MaxPoints} points"
+                : "each point needs a finite frequency >= 0, gain within +/-40 dB and Q in (0, 100]";
 
         static string EqError(GraphicEqConfig cfg) =>
             cfg.BandsDb is not { Length: GraphicEqConfig.BandCount }

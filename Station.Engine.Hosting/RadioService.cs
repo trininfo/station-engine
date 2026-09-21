@@ -633,6 +633,12 @@ public sealed class RadioService : IDisposable
         var persistedTxEq = _dspSettingsStore.GetTxEq() ?? GraphicEqConfig.Default;
         var persistedRxEq = _dspSettingsStore.GetRxEq() ?? GraphicEqConfig.Default;
         var persistedTxGate = _dspSettingsStore.GetTxGate() ?? TxGateConfig.Default;
+        // Parametric curves stay NULL when never set, so a station that has
+        // only ever used the ten-band editor does not get an empty
+        // parametric profile pushed over it at connect.
+        var persistedTxEqP = _dspSettingsStore.GetTxEqParametric();
+        var persistedRxEqP = _dspSettingsStore.GetRxEqParametric();
+        var persistedCfcP = _dspSettingsStore.GetCfcParametric();
         // AGC mode + custom params. Null on a fresh install / legacy DB row
         // falls back to the Med default so first-connect behaviour is unchanged.
         var persistedAgc = NormalizeAgcConfig(
@@ -880,6 +886,9 @@ public sealed class RadioService : IDisposable
             TxEq: persistedTxEq,
             RxEq: persistedRxEq,
             TxGate: persistedTxGate,
+            TxEqParametric: persistedTxEqP,
+            RxEqParametric: persistedRxEqP,
+            CfcParametric: persistedCfcP,
             // Hydrate drive sliders from RadioStateStore so a fresh frontend
             // connect lands on the operator's last-set values. The private
             // fields above (_drivePct / _tunePct) were already hydrated in the
@@ -6213,6 +6222,39 @@ public sealed class RadioService : IDisposable
         _log.LogInformation(
             "radio.setTxGate enabled={On} thresh={Thresh:F1}dB",
             cfg.Enabled, cfg.ThresholdDb);
+        return Snapshot();
+    }
+
+    public StateDto SetTxEqParametric(ParametricEqConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!cfg.IsWellFormed) throw new ArgumentException("parametric EQ out of range", nameof(cfg));
+        Mutate(s => s with { TxEqParametric = cfg });
+        _dspSettingsStore.UpsertParametricEq(cfg, transmit: true);
+        _log.LogInformation("radio.setTxEqParametric enabled={On} points={N}", cfg.Enabled, cfg.Points.Length);
+        return Snapshot();
+    }
+
+    public StateDto SetRxEqParametric(ParametricEqConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!cfg.IsWellFormed) throw new ArgumentException("parametric EQ out of range", nameof(cfg));
+        Mutate(s => s with { RxEqParametric = cfg });
+        _dspSettingsStore.UpsertParametricEq(cfg, transmit: false);
+        _log.LogInformation("radio.setRxEqParametric enabled={On} points={N}", cfg.Enabled, cfg.Points.Length);
+        return Snapshot();
+    }
+
+    public StateDto SetCfcParametric(ParametricCfcConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!cfg.IsWellFormed)
+            throw new ArgumentException("parametric CFC out of range, or its two curves differ in length", nameof(cfg));
+        Mutate(s => s with { CfcParametric = cfg });
+        _dspSettingsStore.Upsert(cfg);
+        _log.LogInformation(
+            "radio.setCfcParametric enabled={On} peq={Peq} points={N}",
+            cfg.Enabled, cfg.PostEqEnabled, cfg.Compression.Points.Length);
         return Snapshot();
     }
 

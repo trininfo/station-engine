@@ -599,6 +599,52 @@ public sealed class DspSettingsStore : IDisposable
         return new GraphicEqConfig(enabled, preamp ?? 0, b);
     }
 
+    /* ---- parametric EQ / CFC --------------------------------------
+     *
+     * Stored as JSON. A row that cannot be parsed — hand-edited, or written
+     * by a future schema — comes back null and the caller falls back to the
+     * default, because refusing to connect over a bad stored curve would be
+     * a poor trade.
+     */
+
+    private static readonly System.Text.Json.JsonSerializerOptions ParametricJson = new();
+
+    private static T? ReadJson<T>(string? s, ILogger log, string what) where T : class
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<T>(s, ParametricJson); }
+        catch (Exception ex) { log.LogWarning(ex, "dspSettings: discarding unreadable {What}", what); return null; }
+    }
+
+    public ParametricEqConfig? GetTxEqParametric(string profileId = "default") =>
+        ReadJson<ParametricEqConfig>(
+            _entries.FindOne(x => x.ProfileId == profileId)?.TxEqParametricJson, _log, "TxEqParametric");
+
+    public ParametricEqConfig? GetRxEqParametric(string profileId = "default") =>
+        ReadJson<ParametricEqConfig>(
+            _entries.FindOne(x => x.ProfileId == profileId)?.RxEqParametricJson, _log, "RxEqParametric");
+
+    public ParametricCfcConfig? GetCfcParametric(string profileId = "default") =>
+        ReadJson<ParametricCfcConfig>(
+            _entries.FindOne(x => x.ProfileId == profileId)?.CfcParametricJson, _log, "CfcParametric");
+
+    public void UpsertParametricEq(ParametricEqConfig config, bool transmit, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var json = System.Text.Json.JsonSerializer.Serialize(config, ParametricJson);
+        var e = _entries.FindOne(x => x.ProfileId == profileId) ?? new DspSettingsEntry { ProfileId = profileId };
+        if (transmit) e.TxEqParametricJson = json; else e.RxEqParametricJson = json;
+        if (e.Id == 0) _entries.Insert(e); else _entries.Update(e);
+    }
+
+    public void Upsert(ParametricCfcConfig config, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var e = _entries.FindOne(x => x.ProfileId == profileId) ?? new DspSettingsEntry { ProfileId = profileId };
+        e.CfcParametricJson = System.Text.Json.JsonSerializer.Serialize(config, ParametricJson);
+        if (e.Id == 0) _entries.Insert(e); else _entries.Update(e);
+    }
+
     public TxGateConfig? GetTxGate(string profileId = "default")
     {
         var e = _entries.FindOne(x => x.ProfileId == profileId);
@@ -846,6 +892,12 @@ public sealed class DspSettingsEntry
     public bool? RxEqEnabled { get; set; }
     public int? RxEqPreampDb { get; set; }
     public int[]? RxEqBandsDb { get; set; }
+    // Parametric curves are variable length, so they persist as JSON
+    // rather than as a fixed column set like the ten-band fields. Null on a
+    // row that predates them.
+    public string? TxEqParametricJson { get; set; }
+    public string? RxEqParametricJson { get; set; }
+    public string? CfcParametricJson { get; set; }
     public bool? TxGateEnabled { get; set; }
     public double? TxGateThresholdDb { get; set; }
     public double? TxGateMutedGainDb { get; set; }

@@ -548,6 +548,12 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
     // shared state inside calcc.c) and FeedPsFeedbackBlock. _psInfoBuf is
     // pinned once and reused on every GetPSInfo call.
     private readonly object _psLock = new();
+    // Thetis's SetXXAEQProfile frees and reallocates the stage's F/G/Q with
+    // no native lock — safe there, where one UI thread makes every call.
+    // Here a REST thread reading the response curve can race a pipeline
+    // thread writing a profile, so every entry point that touches those
+    // arrays (both profile setters and both draw getters) takes this first.
+    private readonly object _eqLock = new();
     private volatile bool _psEnabled;
     private bool _psAuto = true;
     private bool _psSingle;
@@ -4301,7 +4307,10 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
             if (_txaChannelId is not int id) return;
 
             _cfcConfig = cached;
-            _txControlNative.SetTXACFCOMPprofile(id, nfreqs, f, g, e);
+            // Null Q keeps the classic (non-parametric) profile, which is
+            // what the ten-band CfcConfig describes. SetCfcParametric is the
+            // path that carries Q.
+            _txControlNative.SetTXACFCOMPprofile(id, nfreqs, f, g, e, null, null);
             _txControlNative.SetTXACFCOMPPrecomp(id, cached.PreCompDb);
             _txControlNative.SetTXACFCOMPPrePeq(id, cached.PrePeqDb);
             _txControlNative.SetTXACFCOMPPeqRun(id, cached.PostEqEnabled ? 1 : 0);
@@ -4340,11 +4349,14 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         // holding, which on a fresh channel is WDSP's shaped default_G
         // (TXA.c:116) rather than anything the operator asked for.
         var native = cfg.ToNativeArray();
-        unsafe
+        lock (_eqLock)
         {
-            fixed (int* p = native) NativeMethods.SetTXAGrphEQ10(id, p);
+            unsafe
+            {
+                fixed (int* p = native) NativeMethods.SetTXAGrphEQ10(id, p);
+            }
+            NativeMethods.SetTXAEQRun(id, cfg.Enabled ? 1 : 0);
         }
-        NativeMethods.SetTXAEQRun(id, cfg.Enabled ? 1 : 0);
         _log.LogInformation(
             "wdsp.txEq run={Run} preamp={Preamp}dB bands=[{Bands}]",
             cfg.Enabled, cfg.PreampDb, string.Join(",", cfg.BandsDb));
@@ -4357,11 +4369,14 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         int id = state.Id;
 
         var native = cfg.ToNativeArray();
-        unsafe
+        lock (_eqLock)
         {
-            fixed (int* p = native) NativeMethods.SetRXAGrphEQ10(id, p);
+            unsafe
+            {
+                fixed (int* p = native) NativeMethods.SetRXAGrphEQ10(id, p);
+            }
+            NativeMethods.SetRXAEQRun(id, cfg.Enabled ? 1 : 0);
         }
-        NativeMethods.SetRXAEQRun(id, cfg.Enabled ? 1 : 0);
         _log.LogInformation(
             "wdsp.rxEq ch={Ch} run={Run} preamp={Preamp}dB",
             channelId, cfg.Enabled, cfg.PreampDb);
@@ -4383,6 +4398,104 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         _log.LogInformation(
             "wdsp.txGate run={Run} thresh={Thresh:F1}dB muted={Muted:F1}dB",
             cfg.Enabled, cfg.ThresholdDb, cfg.MutedGainDb);
+    }
+
+    /* ---- parametric EQ and CFC (the Thetis WDSP port) ---------------
+     *
+     * The ten-band GrphEQ10 path above and these share one stage: whichever
+     * was set last is what runs. That mirrors Thetis, where the legacy and
+     * parametric editors drive the same eqp.
+     */
+
+    public void SetTxEqParametric(ParametricEqConfig cfg)
+    {
+        if (_disposed != 0 || cfg is null) return;
+        int? txa;
+        lock (_txaLock) txa = _txaChannelId;
+        if (txa is not int id) return;
+
+        cfg.ToNativeArrays(out var f, out var g, out var q);
+        lock (_eqLock)
+        {
+            unsafe
+            {
+                fixed (double* pF = f, pG = g, pQ = q)
+                {
+                    // Profile before run, as everywhere else here: enabling
+                    // first would transmit a block through whatever curve the
+                    // stage was last left holding.
+                    NativeMethods.SetTXAEQProfile(id, cfg.Points.Length, pF, pG, pQ);
+                }
+            }
+            NativeMethods.SetTXAEQRun(id, cfg.Enabled ? 1 : 0);
+        }
+        _log.LogInformation(
+            "wdsp.txEq.parametric run={Run} points={N} preamp={Preamp:F1}dB",
+            cfg.Enabled, cfg.Points.Length, cfg.GlobalGainDb);
+    }
+
+    public void SetRxEqParametric(int channelId, ParametricEqConfig cfg)
+    {
+        if (_disposed != 0 || cfg is null) return;
+        if (!_channels.TryGetValue(channelId, out var state) || state.Stopped) return;
+        int id = state.Id;
+
+        cfg.ToNativeArrays(out var f, out var g, out var q);
+        lock (_eqLock)
+        {
+            unsafe
+            {
+                fixed (double* pF = f, pG = g, pQ = q)
+                {
+                    NativeMethods.SetRXAEQProfile(id, cfg.Points.Length, pF, pG, pQ);
+                }
+            }
+            NativeMethods.SetRXAEQRun(id, cfg.Enabled ? 1 : 0);
+        }
+        _log.LogInformation(
+            "wdsp.rxEq.parametric ch={Ch} run={Run} points={N}",
+            channelId, cfg.Enabled, cfg.Points.Length);
+    }
+
+    public void SetCfcParametric(ParametricCfcConfig cfg)
+    {
+        if (_disposed != 0 || cfg is null) return;
+        int n = cfg.Compression.Points.Length;
+        if (n == 0) return;
+
+        // ONE frequency array for both curves, taken from the compression
+        // curve — Thetis's CFC form does exactly this and drops the post-EQ
+        // curve's own frequencies (frmCFCConfig.setCFCProfile).
+        var f = new double[n];
+        var g = new double[n];
+        var e = new double[n];
+        var qg = new double[n];
+        var qe = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            var cp = cfg.Compression.Points[i];
+            var ep = cfg.PostEq.Points[i];
+            f[i] = cp.FrequencyHz;
+            g[i] = cp.GainDb;
+            qg[i] = cp.Q;
+            e[i] = ep.GainDb;
+            qe[i] = ep.Q;
+        }
+
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int id) return;
+            _txControlNative.SetTXACFCOMPprofile(id, n, f, g, e, qg, qe);
+            // Thetis's Pre-comp and Pre-PEQ are the two curves' flat gains.
+            _txControlNative.SetTXACFCOMPPrecomp(id, cfg.Compression.GlobalGainDb);
+            _txControlNative.SetTXACFCOMPPrePeq(id, cfg.PostEq.GlobalGainDb);
+            _txControlNative.SetTXACFCOMPPeqRun(id, cfg.PostEqEnabled ? 1 : 0);
+            _txControlNative.SetTXACFCOMPRun(id, cfg.Enabled ? 1 : 0);
+        }
+        _log.LogInformation(
+            "wdsp.cfc.parametric run={Run} peq={Peq} points={N} precomp={Pre:F1}dB prepeq={PrePeq:F1}dB",
+            cfg.Enabled, cfg.PostEqEnabled, n,
+            cfg.Compression.GlobalGainDb, cfg.PostEq.GlobalGainDb);
     }
 
     public bool TryGetEqDraw(bool transmit, int channelId, Span<double> x, Span<double> y)
@@ -4412,13 +4525,18 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         // upts is 1024 from create_nurbs (eq.c:64) and nothing mutates it.
         // The length guard above is what keeps that from being a heap
         // overwrite if the constant and the native ever disagree.
-        unsafe
+        // Same lock as the profile setters: these read the stage's F/G/Q,
+        // which a concurrent profile write frees and replaces.
+        lock (_eqLock)
         {
-            fixed (double* px = x)
-            fixed (double* py = y)
+            unsafe
             {
-                if (transmit) NativeMethods.GetTXAEQDraw(id, px, py);
-                else NativeMethods.GetRXAEQDraw(id, px, py);
+                fixed (double* px = x)
+                fixed (double* py = y)
+                {
+                    if (transmit) NativeMethods.GetTXAEQDraw(id, px, py);
+                    else NativeMethods.GetRXAEQDraw(id, px, py);
+                }
             }
         }
         return true;
