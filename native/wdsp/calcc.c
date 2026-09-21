@@ -36,6 +36,10 @@ typedef struct _eqdensity* EQDENSITY;
 typedef struct _extrema* EXTREMA;
 typedef struct _dcby* DCBY;
 
+// Poseidon: most collection buckets SetPSIntsAndSpi may ask for. The bucket
+// arrays are sized to it; the live count is psCollection.nbucks.
+#define SAMPLE_NBUCKS_MAX         16
+
 typedef struct _calcc
 {
 	int channel;
@@ -47,6 +51,19 @@ typedef struct _calcc
 	volatile int scOK;
 	double hw_scale;
 	double rx_scale;
+
+	// Poseidon: Thetis PureSignal switches (WDSP 1.x calcc), ported onto the
+	// 2.10 calibrator. See SetPSPinMode/SetPSMapMode/SetPSStabilize/
+	// SetPSIntsAndSpi at the end of this file.
+	int     pin;
+	int     map;
+	int     stbl;
+	double  alpha;
+	int     ints;
+	int     spi;
+	int     convex;
+	volatile long map_nbucks;			// bucket count tmap was built for; 0 = none
+	double  tmap[SAMPLE_NBUCKS_MAX + 1];
 
 	PSCOLLECTION ps_colct;
 
@@ -212,6 +229,7 @@ void print_OriginalAndFitSamples(CALCC a);
 void print_EQ_Samples(CALCC a);
 
 #define SAMPLE_NBUCKS			  16
+#define SAMPLE_PER_BUCK			  256
 #define SAMPLE_ACCEPT_OVERRANGE	  1
 #define SAMPLE_MIN_X              0.0050
 #define VAR_FORCED_SLOPE          0.001
@@ -327,48 +345,46 @@ typedef struct _psCollection
 {
 	psSample* smps;
 	int nsamps;
-	int tpb    [SAMPLE_NBUCKS];
-	double bbtm[SAMPLE_NBUCKS + 1];
-	int bidx   [SAMPLE_NBUCKS];
-	int cpb    [SAMPLE_NBUCKS];
-	int nidx   [SAMPLE_NBUCKS];
-	int bfull  [SAMPLE_NBUCKS];
+	int nbucks;
+	int tpb    [SAMPLE_NBUCKS_MAX];
+	double bbtm[SAMPLE_NBUCKS_MAX + 1];
+	int bidx   [SAMPLE_NBUCKS_MAX];
+	int cpb    [SAMPLE_NBUCKS_MAX];
+	int nidx   [SAMPLE_NBUCKS_MAX];
+	int bfull  [SAMPLE_NBUCKS_MAX];
 	int nfull;
 } psCollection, *PSCOLLECTION;
 
-static PSCOLLECTION build_collection()
+// Poseidon: the bucket layout, split out of build_collection so that
+// SetPSIntsAndSpi can re-stratify the collection without reallocating it.
+// nbucks equal-width buckets of per_buck samples each; the lowest keeps
+// SAMPLE_MIN_X as its floor. At (16, 256) this is exactly the table 2.10
+// wrote out by hand: 0.0050, 0.0625, 0.1250 ... 0.9375, 1.0.
+static void layout_collection(PSCOLLECTION collect, int nbucks, int per_buck)
 {
-	PSCOLLECTION collect = (PSCOLLECTION)malloc0(sizeof(psCollection));
 	const double s_minx = SAMPLE_MIN_X;
-	collect->bbtm[ 0] = s_minx; collect->tpb[ 0] = 256;
-	collect->bbtm[ 1] = 0.0625; collect->tpb[ 1] = 256;
-	collect->bbtm[ 2] = 0.1250; collect->tpb[ 2] = 256;
-	collect->bbtm[ 3] = 0.1875; collect->tpb[ 3] = 256;
-	collect->bbtm[ 4] = 0.2500; collect->tpb[ 4] = 256;
-	collect->bbtm[ 5] = 0.3125; collect->tpb[ 5] = 256;
-	collect->bbtm[ 6] = 0.3750; collect->tpb[ 6] = 256;
-	collect->bbtm[ 7] = 0.4375; collect->tpb[ 7] = 256;
-	collect->bbtm[ 8] = 0.5000; collect->tpb[ 8] = 256;
-	collect->bbtm[ 9] = 0.5625; collect->tpb[ 9] = 256;
-	collect->bbtm[10] = 0.6250; collect->tpb[10] = 256;
-	collect->bbtm[11] = 0.6875; collect->tpb[11] = 256;
-	collect->bbtm[12] = 0.7500; collect->tpb[12] = 256;
-	collect->bbtm[13] = 0.8125; collect->tpb[13] = 256;
-	collect->bbtm[14] = 0.8750; collect->tpb[14] = 256;
-	collect->bbtm[15] = 0.9375; collect->tpb[15] = 256;
-	collect->bbtm[SAMPLE_NBUCKS] = 1.0;
 	int n = 0;
-	for (int i = 0; i < SAMPLE_NBUCKS; i++)
+	collect->nbucks = nbucks;
+	for (int i = 0; i < nbucks; i++)
 	{
+		collect->bbtm[i] = (i == 0) ? s_minx : (double)i / (double)nbucks;
+		collect->tpb[i] = per_buck;
 		collect->bidx[i] = n;
 		collect->nidx[i] = 0;
 		collect->cpb[i] = 0;
 		collect->bfull[i] = 0;
-		n += collect->tpb[i];
+		n += per_buck;
 	}
-	collect->nsamps = n;
-	collect->smps = (psSample*)malloc0(n * sizeof(psSample));
+	collect->bbtm[nbucks] = 1.0;
 	collect->nfull = 0;
+}
+
+static PSCOLLECTION build_collection()
+{
+	PSCOLLECTION collect = (PSCOLLECTION)malloc0(sizeof(psCollection));
+	layout_collection(collect, SAMPLE_NBUCKS, SAMPLE_PER_BUCK);
+	collect->nsamps = SAMPLE_NBUCKS * SAMPLE_PER_BUCK;
+	collect->smps = (psSample*)malloc0(collect->nsamps * sizeof(psSample));
 	return collect;
 }
 
@@ -397,17 +413,20 @@ static int find_range_index(const double bounds[], int n, double val)
 	return low;
 }
 
-static void putSample(double* tx, double* rx, double hw_scale, PSCOLLECTION Collect)
+// Poseidon: `bounds` is the bucket edges to sort by -- Collect->bbtm, or the
+// MAP remapping (calcc.tmap) when that is live. Both hold nbucks + 1 edges.
+static void putSample(double* tx, double* rx, double hw_scale, PSCOLLECTION Collect,
+	const double* bounds)
 {
 	double env_tx = sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
 	double env_rx = sqrt(rx[0] * rx[0] + rx[1] * rx[1]);
 	if (env_tx < 1.0e-30 || env_rx < 1.0e-30) return;
 	double norm_tx = env_tx * hw_scale;
-	int buck = find_range_index(Collect->bbtm, SAMPLE_NBUCKS + 1, norm_tx);
+	int buck = find_range_index(bounds, Collect->nbucks + 1, norm_tx);
 	if (buck < 0) return;
-	if (buck >= SAMPLE_NBUCKS)
+	if (buck >= Collect->nbucks)
 	{
-		if (SAMPLE_ACCEPT_OVERRANGE)  buck = SAMPLE_NBUCKS - 1;
+		if (SAMPLE_ACCEPT_OVERRANGE)  buck = Collect->nbucks - 1;
 		else return;
 	}
 	int index_to_fill = Collect->bidx[buck] + Collect->nidx[buck];
@@ -427,11 +446,11 @@ static void putSample(double* tx, double* rx, double hw_scale, PSCOLLECTION Coll
 static int sampleCheckAndUpdate(PSCOLLECTION Collect)
 {
 	int rval = 0;
-	if (Collect->nfull == SAMPLE_NBUCKS)
+	if (Collect->nfull == Collect->nbucks)
 	{
 		rval = 1;
 		Collect->nfull = 0;
-		for (int i = 0; i < SAMPLE_NBUCKS; i++)
+		for (int i = 0; i < Collect->nbucks; i++)
 		{
 			Collect->nidx[i] = 0;
 			Collect->cpb[i] = 0;
@@ -444,7 +463,7 @@ static int sampleCheckAndUpdate(PSCOLLECTION Collect)
 static void sampleCollectClear(PSCOLLECTION Collect)
 {
 	Collect->nfull = 0;
-	for (int i = 0; i < SAMPLE_NBUCKS; i++)
+	for (int i = 0; i < Collect->nbucks; i++)
 	{
 		Collect->nidx[i] = 0;
 		Collect->cpb[i] = 0;
@@ -841,6 +860,30 @@ static double top_bucket_useful_frac(const CurveEMA* m, double bottom)
 	return frac_top_bucket;
 }
 
+// Poseidon: Thetis's "map calc" (1.x calcc.c calc(), gated by scOK). For each
+// bucket edge t on the FEEDBACK axis, the TX envelope that lands there is
+// t * magnitude-correction(t), so tmap holds the TX-envelope edges that make
+// every bucket an equal slice of the feedback axis the fit runs on. Built from
+// m_calavg, the curve iqc is actually applying. Published only if it is
+// strictly increasing inside (SAMPLE_MIN_X, 1): find_range_index needs sorted
+// edges, and 1.x never checked.
+static void build_tmap(CALCC a)
+{
+	const int nb = a->ps_colct->nbucks;
+	double dummy = 0.0;
+	int ok = (nb >= 1) && (a->m_calavg.count > 0);
+	a->tmap[0] = SAMPLE_MIN_X;
+	for (int k = 1; k < nb; k++)
+	{
+		double t = (double)k / (double)nb;
+		a->tmap[k] = t * get_mag_correction_ema(&a->m_calavg, t, &dummy);
+		if (!(a->tmap[k] > a->tmap[k - 1]) || !(a->tmap[k] < 1.0)) ok = 0;
+	}
+	a->tmap[nb] = 1.0;
+	a->convex = ok && ((a->tmap[nb] - a->tmap[nb - 1]) > (1.0 / (double)nb));
+	InterlockedExchange(&a->map_nbucks, ok ? nb : 0);
+}
+
 static void size_calcc (CALCC a)
 {
 	a->nsamps = a->ps_colct->nsamps;
@@ -1035,6 +1078,19 @@ CALCC create_calcc (int channel, int runcal, int size, int rate, double hw_scale
 	a->ctrl.loopdelay = loopdelay;
 	a->mox = mox;
 
+	// Poseidon: the Thetis switches. pin/stbl/alpha/ints/spi are Thetis's own
+	// create_calcc arguments (TXA.c). MAP is the exception: Thetis creates it
+	// ON, but 2.10 has never remapped its buckets, so it starts OFF here and
+	// the calibrator behaves exactly as it did until someone turns it on.
+	a->pin   = 1;
+	a->map   = 0;
+	a->stbl  = 0;
+	a->alpha = 0.9;
+	a->ints  = SAMPLE_NBUCKS;
+	a->spi   = SAMPLE_PER_BUCK;
+	a->convex = 0;
+	a->map_nbucks = 0;
+
 	a->ps_colct = build_collection();
 
 	a->info  = (int *) malloc0 (16 * sizeof (int));
@@ -1155,21 +1211,38 @@ static void calc (CALCC a)
 	}
 
 	ExtrapolationResult Extrapolate_Res = extrapolate_y_at_1(a->m_extrap1, a->norm_TX, a->env_RX, a->nsamps);
-	a->rx_scale = 1.0 / Extrapolate_Res.y_at_1;
+	// Poseidon STBL (1.x calc()): while a correction is running, average
+	// rx_scale across collections instead of taking each one whole. Unlike
+	// 1.x, a rejected extrapolation is kept out of the average.
+	const int stbl_on = a->stbl && _InterlockedAnd(&a->ctrl.running, 1) && (a->rx_scale > 0.0);
+	if (!stbl_on)
+		a->rx_scale = 1.0 / Extrapolate_Res.y_at_1;
 	if (Extrapolate_Res.confidence)
 	{
 		a->binfo[0] |= 0b0001;
 		goto cleanup;
 	}
+	if (stbl_on)
+		a->rx_scale = a->alpha * a->rx_scale + (1.0 - a->alpha) * (1.0 / Extrapolate_Res.y_at_1);
 
 	a->binfo[4] = (int)(256.0 * (a->hw_scale / a->rx_scale));
 
+	// Poseidon STBL: blend each new sample toward the correction already
+	// running, weight alpha on the old. 1.x evaluated its cubic segments;
+	// 2.10's running curve is the m/c/s CurveEMA that iqc applies.
+	const int stbl_blend = stbl_on && a->scOK && (a->m_calavg.count > 0)
+		&& (a->c_calavg.count > 0) && (a->s_calavg.count > 0);
+	double m_hint = 0.0, c_hint = 0.0, s_hint = 0.0;
 	for (int i = 0; i < a->nsamps; i++)
 	{
 		const double slope = VAR_FORCED_SLOPE;
 		double rx_c = a->env_RX[i];
-		double max_rx = (1.0 - slope + slope * a->hw_scale * a->env_TX[i]) / a->rx_scale;
-		if (rx_c > max_rx) rx_c = max_rx;
+		// Poseidon PIN: 1.x gated this regression clip on pin; 2.10 ran it always.
+		if (a->pin)
+		{
+			double max_rx = (1.0 - slope + slope * a->hw_scale * a->env_TX[i]) / a->rx_scale;
+			if (rx_c > max_rx) rx_c = max_rx;
+		}
 		a->x[i]  = a->rx_scale * rx_c;
 		a->ym[i] = (a->hw_scale * a->env_TX[i]) / (a->rx_scale * rx_c);
 		double norm = a->env_TX[i] * a->env_RX[i];
@@ -1177,6 +1250,15 @@ static void calc (CALCC a)
 			        + b->smps[i].tx.Q * b->smps[i].rx.Q) / norm;
 		a->ys[i] = (- b->smps[i].tx.I * b->smps[i].rx.Q
 			        + b->smps[i].tx.Q * b->smps[i].rx.I) / norm;
+		if (stbl_blend)
+		{
+			double ymo = get_mag_correction_ema(&a->m_calavg, a->x[i], &m_hint);
+			double yco = get_phase_correction_ema(&a->c_calavg, a->x[i], &c_hint);
+			double yso = get_phase_correction_ema(&a->s_calavg, a->x[i], &s_hint);
+			a->ym[i] = a->alpha * ymo + (1.0 - a->alpha) * a->ym[i];
+			a->yc[i] = a->alpha * yco + (1.0 - a->alpha) * a->yc[i];
+			a->ys[i] = a->alpha * yso + (1.0 - a->alpha) * a->ys[i];
+		}
 	}
 
 	if (DCB_ENABLED)
@@ -1258,7 +1340,7 @@ static void calc (CALCC a)
 	a->m_config->uniform_knots       = PS_NF_UNIFORM_KNOTS;
 	a->m_config->pin_start           = PS_NF_PIN_START;
 	a->m_config->start_pt            = (NF_Point2){ PS_NF_PIN_START_X, a->m_y_pin_try };
-	a->m_config->pin_end             = PS_NF_MAG_PIN_END;
+	a->m_config->pin_end             = a->pin ? PS_NF_MAG_PIN_END : 0;	// Poseidon PIN
 	a->m_config->end_pt              = (NF_Point2){ PS_NF_MAG_END_X, PS_NF_MAG_END_Y };
 	a->m_config->pin_end_horiz       = a->m_fold_prev;
 	a->m_config->pin_end_flat        = a->m_fold_prev;
@@ -1673,6 +1755,8 @@ static void calc (CALCC a)
 	curve_ema_update(&a->s_calavg, a->s_spline);
 	a->s_prev_y = a->s_calavg.ys[0];
 
+	build_tmap(a);	// Poseidon MAP: rebuilt on every good fit, used only while map is on
+
 	EnterCriticalSection (&a->disp.cs_disp);
 	a->disp.nsamps = a->nsamps;
 	memcpy(a->disp.x,  a->x,  a->nsamps * sizeof (double));
@@ -1919,6 +2003,7 @@ void pscc (int channel, int size, double* tx, double* rx)
 				a->c_y_pin_valid = 0; a->c_y_pin_ema = 1.0; a->c_pin_cycle = 0;
 				a->s_y_pin_valid = 0; a->s_y_pin_ema = 0.0; a->s_pin_cycle = 0;
 				a->scheck_valid = 0;
+				InterlockedExchange(&a->map_nbucks, 0);	// Poseidon MAP: its curve is gone
 				a->ctrl.reset = 0;
 				if (!a->ctrl.turnon)
 					if (InterlockedBitTestAndReset(&a->ctrl.running, 0))
@@ -1973,9 +2058,15 @@ void pscc (int channel, int size, double* tx, double* rx)
 		    case LCOLLECT:
 				InterlockedExchange (&a->ctrl.current_state, LCOLLECT);
 				int full = 0;
+				// Poseidon MAP (1.x LCOLLECT): only while a correction is running
+				// and the PA is compressing (convex), as in 1.x.
+				const double* bounds = a->ps_colct->bbtm;
+				if (a->map && a->convex && _InterlockedAnd(&a->ctrl.running, 1)
+					&& a->map_nbucks == a->ps_colct->nbucks)
+					bounds = a->tmap;
 				for (i = 0; i < a->size; i++)
 				{
-					putSample(&tx[2 * i], &rx[2 * i], a->hw_scale, a->ps_colct);
+					putSample(&tx[2 * i], &rx[2 * i], a->hw_scale, a->ps_colct, bounds);
 					full = sampleCheckAndUpdate(a->ps_colct);
 					if (full) break;
 				}
@@ -1989,7 +2080,7 @@ void pscc (int channel, int size, double* tx, double* rx)
 				else if (full)
 					a->ctrl.state = MOXCHECK;
 				else if (top_bucket_useful_frac(&a->m_calavg,
-					a->ps_colct->bbtm[SAMPLE_NBUCKS - 1]) < DEADLOCK_MIN_FRAC)
+					a->ps_colct->bbtm[a->ps_colct->nbucks - 1]) < DEADLOCK_MIN_FRAC)
 				{
 					a->ctrl.state = LRESET;
 					a->info[6] |= 2;
@@ -2030,7 +2121,7 @@ void pscc (int channel, int size, double* tx, double* rx)
 					else if (a->scOK)
 					{
 						if (top_bucket_useful_frac(&a->m_calavg,
-							a->ps_colct->bbtm[SAMPLE_NBUCKS - 1]) < DEADLOCK_MIN_FRAC)
+							a->ps_colct->bbtm[a->ps_colct->nbucks - 1]) < DEADLOCK_MIN_FRAC)
 						{
 							a->ctrl.state = LRESET;
 							a->info[6] |= 2;
@@ -2329,6 +2420,70 @@ void SetPSFeedbackRate (int channel, int rate)
 	LeaveCriticalSection (&txa[channel].calcc.cs_update);
 }
 
+/********************************************************************************************************
+*																										*
+*			Poseidon: Thetis PureSignal switches, ported from WDSP 1.x calcc.c							*
+*																										*
+********************************************************************************************************/
+
+// PIN: pin the top of the gain curve at (1,1) and clip feedback overshoot
+// against it. Thetis default 1, which is what 2.10 always did.
+PORT
+void SetPSPinMode (int channel, int pin)
+{
+	EnterCriticalSection (&txa[channel].calcc.cs_update);
+	txa[channel].calcc.p->pin = (pin != 0);
+	LeaveCriticalSection (&txa[channel].calcc.cs_update);
+}
+
+// MAP: stratify collection buckets by where the feedback lands rather than by
+// TX drive. Thetis default 1; created 0 here, see create_calcc.
+PORT
+void SetPSMapMode (int channel, int map)
+{
+	EnterCriticalSection (&txa[channel].calcc.cs_update);
+	txa[channel].calcc.p->map = (map != 0);
+	LeaveCriticalSection (&txa[channel].calcc.cs_update);
+}
+
+// STBL: average successive collections, alpha 0.9 on the old. Thetis default 0.
+PORT
+void SetPSStabilize (int channel, int stbl)
+{
+	EnterCriticalSection (&txa[channel].calcc.cs_update);
+	txa[channel].calcc.p->stbl = (stbl != 0);
+	LeaveCriticalSection (&txa[channel].calcc.cs_update);
+}
+
+// INTS/SPI: how many drive-level buckets the collection is stratified into,
+// and how many samples each must hold. Thetis offers 16/256, 8/512, 4/1024.
+//
+// Only layouts with ints * spi equal to the collection size are accepted;
+// anything else is ignored. That keeps every buffer sized as it is -- in
+// particular GetPSDisp's x/ym/yc/ys, which callers size to nsamps before the
+// call reports it. In 1.x ints also set the correction's segment count, which
+// is why 1.x had to shut PS down and resize iqc. 2.10's correction is a spline
+// independent of the bucket layout, so here the collection is re-laid-out and
+// restarted and a running correction is left alone.
+PORT
+void SetPSIntsAndSpi (int channel, int ints, int spi)
+{
+	CALCC a;
+	EnterCriticalSection (&txa[channel].calcc.cs_update);
+	a = txa[channel].calcc.p;
+	if (ints >= 1 && ints <= SAMPLE_NBUCKS_MAX && spi >= 1
+		&& ints * spi == a->ps_colct->nsamps
+		&& (ints != a->ints || spi != a->spi))
+	{
+		InterlockedExchange(&a->map_nbucks, 0);
+		layout_collection(a->ps_colct, ints, spi);
+		a->ints = ints;
+		a->spi = spi;
+		a->ctrl.count = 0;
+	}
+	LeaveCriticalSection (&txa[channel].calcc.cs_update);
+}
+
 void print_FitResult_and_Data(CALCC a, char* type, int printWhat)
 {
 	int rtype = 0;
@@ -2506,7 +2661,7 @@ void print_OriginalAndFitSamples (CALCC a)
 		fprintf(f, "rx_scale = %12.4e\n", a->rx_scale);
 		fprintf(f, "\n buck      env_tx          env_rx                 ");
 		fprintf(f, "x              ym             yc            ys\n");
-		for (int i = 0, k = 0; i < SAMPLE_NBUCKS; i++)
+		for (int i = 0, k = 0; i < a->ps_colct->nbucks; i++)
 		{
 			for (int j = 0; j < a->ps_colct->tpb[i]; j++)
 			{

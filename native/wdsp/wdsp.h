@@ -279,6 +279,11 @@ extern void GetPSHWPeak (int channel, double* peak);
 extern void GetPSMaxTX (int channel, double* maxtx);
 extern void GetPSDisp (int channel, double* x, double* ym, double* yc, double* ys, double* xm_cor, double* ym_cor, double* xa_cor, double* ya_cor, int* nsamps_out, int* cpts_out, double* phs_ref_deg_out);
 extern void SetPSFeedbackRate (int channel, int rate);
+// Poseidon: Thetis PureSignal switches ported onto the 2.10 calibrator (calcc.c).
+extern void SetPSPinMode (int channel, int pin);
+extern void SetPSMapMode (int channel, int map);
+extern void SetPSStabilize (int channel, int stbl);
+extern void SetPSIntsAndSpi (int channel, int ints, int spi);
 
 //
 // Interfaces from cblock.c
