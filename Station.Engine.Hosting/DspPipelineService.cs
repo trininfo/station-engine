@@ -2095,8 +2095,28 @@ public class DspPipelineService : BackgroundService,
     /// operator's FFT/window/smoothing rather than engine defaults. Also seeds
     /// the cal-offset field read by <see cref="Tick"/>. Display-only — never
     /// touches the transmitted signal.</summary>
+    // FORK-LOCAL: RX display smoothing, held here because engines are
+    // recreated on every connect. Seeded alongside the TX display config,
+    // which every site that builds an engine already calls.
+    private double _rxPanAvgTauSec = 0.100;
+    private double _rxWfAvgTauSec = 0.0;
+
+    public (double PanTauMs, double WfTauMs) RxDisplayAveraging =>
+        (Volatile.Read(ref _rxPanAvgTauSec) * 1000.0, Volatile.Read(ref _rxWfAvgTauSec) * 1000.0);
+
+    public void ApplyRxDisplayAveraging(double panTauMs, double wfTauMs)
+    {
+        Volatile.Write(ref _rxPanAvgTauSec, panTauMs / 1000.0);
+        Volatile.Write(ref _rxWfAvgTauSec, wfTauMs / 1000.0);
+        var engine = CurrentEngine;
+        if (engine is null) return;
+        lock (_engineLock) engine.ConfigureRxDisplayAveraging(panTauMs / 1000.0, wfTauMs / 1000.0);
+    }
+
     private void SeedTxDisplayConfig(IDspEngine engine)
     {
+        engine.ConfigureRxDisplayAveraging(
+            Volatile.Read(ref _rxPanAvgTauSec), Volatile.Read(ref _rxWfAvgTauSec));
         int fft = Volatile.Read(ref _txDisplayFftSize);
         int window = Volatile.Read(ref _txDisplayWindow);
         double tauSec = Volatile.Read(ref _txDisplayAvgTauSec);

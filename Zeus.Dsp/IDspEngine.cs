@@ -494,6 +494,15 @@ public interface IDspEngine : IDisposable
     /// </summary>
     PsCurve? GetPsCurve() => null;
 
+    /// <summary>FORK-LOCAL. RX display smoothing, per output: the panadapter
+    /// line and the waterfall line separately, as recursive time constants in
+    /// seconds (0 = the current frame only). Upstream applies one 100 ms
+    /// average to BOTH, so the waterfall line was exactly as smoothed as the
+    /// pan line. Defaulted to a no-op for engines with no WDSP analyzer;
+    /// wrappers MUST forward it, or the setting silently stops at them.
+    /// </summary>
+    void ConfigureRxDisplayAveraging(double panTauSec, double wfTauSec) { }
+
     /// <summary>Reset PS state — calls <c>SetPSControl(1,0,0,0)</c>. Useful
     /// after an aborted calibration or when changing radios.</summary>
     void ResetPs();

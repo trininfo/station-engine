@@ -89,6 +89,8 @@ internal sealed class ExternalProtocol3TxDspEngine : IDspEngine
     public TxPhaseRotatorAsymmetry? GetTxPhaseRotatorAsymmetry(int channelId) =>
         _inner.GetTxPhaseRotatorAsymmetry(channelId);
     public void SetRxDisplayFastAttack(int channelId, bool fast) => _inner.SetRxDisplayFastAttack(channelId, fast);
+    public void ConfigureRxDisplayAveraging(double panTauSec, double wfTauSec) =>
+        _inner.ConfigureRxDisplayAveraging(panTauSec, wfTauSec);
     public void SetRxAfGainDb(int channelId, double db) => _inner.SetRxAfGainDb(channelId, db);
     public void SetNoiseReduction(int channelId, NrConfig cfg) => _inner.SetNoiseReduction(channelId, cfg);
     public Nr3ModelLoadResult LoadNr3Model(string? modelFilePath) => _inner.LoadNr3Model(modelFilePath);

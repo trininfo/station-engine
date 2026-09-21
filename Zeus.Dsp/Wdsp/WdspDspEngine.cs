@@ -942,7 +942,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
             analyzerOpened = true;
 
             ConfigureAnalyzer(id, sampleRateHz, InSize, pixelWidth, zoomLevel: 1, _rxAnalyzerFftSize, AnalyzerWindow, AnalyzerKaiserPi);
-            ConfigureDisplayAveraging(id);
+            ConfigureRxDisplayAveragingFor(id, fast: false);
 
             // RX channel slots are process-global, so the corresponding display
             // slots 32..63 are unique across engine instances and remain below
@@ -1314,6 +1314,41 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         ConfigureMaxBinDetector(state);
     }
 
+    // FORK-LOCAL: RX display smoothing per output (see IDspEngine). The
+    // waterfall defaults to the current frame only - it is a picture of
+    // time, and its rows are the averaging.
+    private double _rxPanTauSec = DefaultAvgTauSec;
+    private double _rxWfTauSec = 0.0;
+
+    public void ConfigureRxDisplayAveraging(double panTauSec, double wfTauSec)
+    {
+        Volatile.Write(ref _rxPanTauSec, Math.Max(0.0, panTauSec));
+        Volatile.Write(ref _rxWfTauSec, Math.Max(0.0, wfTauSec));
+        foreach (var (id, state) in _channels)
+        {
+            lock (state.AnalyzerLock) ConfigureRxDisplayAveragingFor(id, fast: false);
+        }
+    }
+
+    // Fast attack after a retune still wins - post-retune content must settle
+    // in ~100 ms - but never SLOWS an output already set faster.
+    private void ConfigureRxDisplayAveragingFor(int disp, bool fast)
+    {
+        double pan = Volatile.Read(ref _rxPanTauSec);
+        double wf = Volatile.Read(ref _rxWfTauSec);
+        if (fast) { pan = Math.Min(pan, FastAttackTauSec); wf = Math.Min(wf, FastAttackTauSec); }
+        ConfigureDisplayAveragingPixout(disp, (int)DisplayPixout.Panadapter, pan);
+        ConfigureDisplayAveragingPixout(disp, (int)DisplayPixout.Waterfall, wf);
+    }
+
+    private static void ConfigureDisplayAveragingPixout(int disp, int pixout, double tauSec)
+    {
+        double backmult = tauSec <= 0.0 ? 0.0 : Math.Exp(-1.0 / (PipelineFps * tauSec));
+        NativeMethods.SetDisplayAverageMode(disp, pixout, LogRecursiveMode);
+        NativeMethods.SetDisplayAvBackmult(disp, pixout, backmult);
+        NativeMethods.SetDisplayNumAverage(disp, pixout, 2);
+    }
+
     public void SetRxDisplayFastAttack(int channelId, bool fast)
     {
         if (!_channels.TryGetValue(channelId, out var state)) return;
@@ -1325,7 +1360,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         // (worker) and GetPixels (pipeline tick) otherwise.
         lock (state.AnalyzerLock)
         {
-            ConfigureDisplayAveragingTau(channelId, fast ? FastAttackTauSec : DefaultAvgTauSec);
+            ConfigureRxDisplayAveragingFor(channelId, fast);
         }
     }
 
