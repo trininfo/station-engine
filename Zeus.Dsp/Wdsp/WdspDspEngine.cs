@@ -562,8 +562,20 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
      * lock that keeps the audio thread away from create/destroy. Every
      * SetDEXP* setter dereferences pdexp[id] with no null check, so nothing
      * may be pushed before _dexpCreated.
+     *
+     * The id is a SLOT, taken per instance, never a constant. pdexp[] is
+     * process-global and there can be two engines alive at once: the
+     * offline preview wraps its own WdspDspEngine, and connecting builds a
+     * new one before the preview is disposed. With a fixed id 0 the
+     * preview's DestroyDexpLocked freed the NEW engine's expander, and the
+     * new engine's next SetDEXP* ran on freed memory — 0xC0000005 in
+     * SetDEXPDetectorTau on every radio connect. WDSP channels avoid this
+     * with the native slot allocator; the expander now has its own.
      */
-    private const int DexpId = 0;
+    private const int DexpSlots = 4;                         // WDSP: DEXP pdexp[4]
+    private static readonly bool[] s_dexpSlotUsed = new bool[DexpSlots];
+    private static readonly object s_dexpSlotLock = new();
+    private int _dexpId = -1;                                // this instance's slot while created
     private readonly object _dexpLock = new();
     private unsafe double* _dexpBuf;          // interleaved complex, _dexpSize samples
     private bool _dexpCreated;
@@ -4556,12 +4568,42 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
 
     /// <summary>Build the stage, or rebuild it when the TX block size or
     /// rate has changed under it. Allocates — control thread only.</summary>
+    private static int AcquireDexpSlot()
+    {
+        lock (s_dexpSlotLock)
+        {
+            for (int i = 0; i < DexpSlots; i++)
+            {
+                if (s_dexpSlotUsed[i]) continue;
+                s_dexpSlotUsed[i] = true;
+                return i;
+            }
+            return -1;
+        }
+    }
+
+    private static void ReleaseDexpSlot(int id)
+    {
+        if (id < 0 || id >= DexpSlots) return;
+        lock (s_dexpSlotLock) s_dexpSlotUsed[id] = false;
+    }
+
     private unsafe void EnsureDexpLocked(int size, int rateHz)
     {
         if (size <= 0 || rateHz <= 0) return;
         if (_dexpCreated && _dexpSize == size && _dexpRateHz == rateHz) return;
 
         DestroyDexpLocked();
+
+        int slot = AcquireDexpSlot();
+        if (slot < 0)
+        {
+            // Four engines alive at once is a leak elsewhere; run without the
+            // gate rather than share a slot and corrupt another engine's.
+            _log.LogWarning("wdsp.txDexp no free pdexp slot; the TX expander is off for this engine");
+            return;
+        }
+        _dexpId = slot;
 
         // WDSP's buffers are interleaved complex doubles and it keeps the
         // pointer, so this is unmanaged and lives until destroy_dexp.
@@ -4571,7 +4613,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
 
         var c = _dexpConfig;
         NativeMethods.create_dexp(
-            DexpId,
+            _dexpId,
             0,                              // start stopped; SetDEXPRun follows
             size,
             _dexpBuf, _dexpBuf,             // in place, as ChannelMaster does
@@ -4593,37 +4635,39 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         _dexpCreated = true;
         _dexpSize = size;
         _dexpRateHz = rateHz;
-        _log.LogInformation("wdsp.txDexp created size={Size} rate={Rate}", size, rateHz);
+        _log.LogInformation("wdsp.txDexp created slot={Slot} size={Size} rate={Rate}", _dexpId, size, rateHz);
     }
 
     private void ApplyDexpLocked(TxDexpConfig c)
     {
-        NativeMethods.SetDEXPDetectorTau(DexpId, c.DetectorTauSec);
-        NativeMethods.SetDEXPAttackTime(DexpId, c.AttackSec);
-        NativeMethods.SetDEXPReleaseTime(DexpId, c.ReleaseSec);
-        NativeMethods.SetDEXPHoldTime(DexpId, c.HoldSec);
-        NativeMethods.SetDEXPExpansionRatio(DexpId, c.ExpansionRatioLinear);
-        NativeMethods.SetDEXPHysteresisRatio(DexpId, c.HysteresisRatioLinear);
-        NativeMethods.SetDEXPAttackThreshold(DexpId, c.ThresholdLinear);
-        NativeMethods.SetDEXPLowCut(DexpId, c.SideChannelLowCutHz);
-        NativeMethods.SetDEXPHighCut(DexpId, c.SideChannelHighCutHz);
-        NativeMethods.SetDEXPRunSideChannelFilter(DexpId, c.SideChannelFilterEnabled ? 1 : 0);
-        NativeMethods.SetDEXPAudioDelay(DexpId, c.LookAheadSec);
-        NativeMethods.SetDEXPRunAudioDelay(DexpId, c.LookAheadEnabled ? 1 : 0);
-        NativeMethods.SetDEXPRunVox(DexpId, 0);
+        NativeMethods.SetDEXPDetectorTau(_dexpId, c.DetectorTauSec);
+        NativeMethods.SetDEXPAttackTime(_dexpId, c.AttackSec);
+        NativeMethods.SetDEXPReleaseTime(_dexpId, c.ReleaseSec);
+        NativeMethods.SetDEXPHoldTime(_dexpId, c.HoldSec);
+        NativeMethods.SetDEXPExpansionRatio(_dexpId, c.ExpansionRatioLinear);
+        NativeMethods.SetDEXPHysteresisRatio(_dexpId, c.HysteresisRatioLinear);
+        NativeMethods.SetDEXPAttackThreshold(_dexpId, c.ThresholdLinear);
+        NativeMethods.SetDEXPLowCut(_dexpId, c.SideChannelLowCutHz);
+        NativeMethods.SetDEXPHighCut(_dexpId, c.SideChannelHighCutHz);
+        NativeMethods.SetDEXPRunSideChannelFilter(_dexpId, c.SideChannelFilterEnabled ? 1 : 0);
+        NativeMethods.SetDEXPAudioDelay(_dexpId, c.LookAheadSec);
+        NativeMethods.SetDEXPRunAudioDelay(_dexpId, c.LookAheadEnabled ? 1 : 0);
+        NativeMethods.SetDEXPRunVox(_dexpId, 0);
         // Run last, for the same reason the EQ and gate set parameters
         // first: otherwise a block goes through the stage as it was.
-        NativeMethods.SetDEXPRun(DexpId, c.Enabled ? 1 : 0);
+        NativeMethods.SetDEXPRun(_dexpId, c.Enabled ? 1 : 0);
     }
 
     private unsafe void DestroyDexpLocked()
     {
         if (_dexpCreated)
         {
-            NativeMethods.SetDEXPRun(DexpId, 0);
-            NativeMethods.destroy_dexp(DexpId);
+            NativeMethods.SetDEXPRun(_dexpId, 0);
+            NativeMethods.destroy_dexp(_dexpId);
             _dexpCreated = false;
         }
+        ReleaseDexpSlot(_dexpId);
+        _dexpId = -1;
         if (_dexpBuf != null)
         {
             NativeMemory.AlignedFree(_dexpBuf);
@@ -4655,7 +4699,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                 b[2 * i + 0] = mic[i];
                 b[2 * i + 1] = 0.0;
             }
-            NativeMethods.xdexp(DexpId);
+            NativeMethods.xdexp(_dexpId);
             for (int i = 0; i < inSize; i++) dst[i] = (float)b[2 * i + 0];
         }
         return true;
