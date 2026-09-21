@@ -71,6 +71,31 @@ public static class AudioSuiteEndpoints
         // the units its panel shows (ms, dB); the conversion to WDSP's
         // seconds and linear ratios happens at the engine seam, as in
         // Thetis's own setup.cs.
+        // FORK: the TX plate reverb. 409 rather than a silent accept when
+        // plate_reverb.dll is not loaded: a control that does nothing is
+        // worse than one that says why.
+        endpoints.MapPost("/api/tx/reverb", (TxReverbSetRequest req, RadioService r) =>
+        {
+            if (req?.Config is not { } cfg)
+                return Results.BadRequest(new { error = "Config required" });
+            if (!cfg.IsWellFormed)
+                return Results.BadRequest(new
+                {
+                    error = "mix 0..1, dry/wet -60..0 dB, output -12..6 dB, decay 0.1..7 s, "
+                          + "pre-delay 0..100 ms, damping 0..0.9, low cut 20..1000 Hz below "
+                          + "high cut 1000..20000 Hz, diffusion 0..1, mod 0.05..5 Hz x0..2"
+                });
+            if (cfg.Enabled && !Zeus.Dsp.Wdsp.WdspDspEngine.TxReverbLibraryAvailable)
+                return Results.Conflict(new
+                {
+                    error = "plate_reverb.dll is not loaded: put it next to the engine or set PLATE_REVERB_LIB"
+                });
+            log.LogInformation(
+                "api.tx.reverb enabled={On} mix={Mix:F2} wet={Wet:F1}dB decay={Decay:F2}s",
+                cfg.Enabled, cfg.Mix, cfg.WetDb, cfg.DecaySeconds);
+            return Results.Ok(r.SetTxReverb(cfg));
+        });
+
         endpoints.MapPost("/api/tx/dexp", (TxDexpSetRequest req, RadioService r) =>
         {
             if (req?.Config is not { } cfg)

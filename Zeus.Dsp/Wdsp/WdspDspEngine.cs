@@ -51,7 +51,7 @@ using Zeus.Contracts;
 
 namespace Zeus.Dsp.Wdsp;
 
-public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
+public sealed partial class WdspDspEngine : IDspEngine, ITxAudioPluginHost
 {
     // A 512-sample host exchange and DSP partition gives RXA a 10.67 ms
     // scheduling quantum at 48 kHz. Protocol clients already partial-frame IQ
@@ -2744,6 +2744,8 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                         _dexpActive = _dexpConfig.Enabled;
                     }
                 }
+                // FORK: the plate reverb's WDSP insert (WdspDspEngine.Reverb.cs).
+                lock (_reverbLock) ApplyReverbLocked(id);
                 return id;
             }
             catch
@@ -2823,6 +2825,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         if (moxOn)
         {
             _moxOn = true;
+            ReverbKeyEdge();                            // FORK: see WdspDspEngine.Reverb.cs
             if (stopRxForPureSignal)
             {
                 rxaPrior = NativeMethods.SetChannelState(rxaId, 0, 1);
@@ -2846,6 +2849,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
         else
         {
             _moxOn = false;
+            ReverbKeyEdge();                            // FORK: see WdspDspEngine.Reverb.cs
             // Drop the PS MOX flag *before* the TXA state-flip so the iqc
             // stage sees "no longer transmitting" while the chain is still
             // alive — same ordering pihpsdr uses (transmitter.c:2422-2444).
@@ -5029,6 +5033,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                             _txDispZoomLevel = 1;
                             _txDispScratchPixels = null;
                         }
+                        ReverbBeforeTxClose();          // FORK: hook out while the channel still exists
                         RunNativeLifecycleCriticalSection(() => NativeMethods.CloseChannel(txa));
                     }
                 }
@@ -5041,6 +5046,7 @@ public sealed class WdspDspEngine : IDspEngine, ITxAudioPluginHost
                     // The expander outlives the TXA channel otherwise: WDSP
                     // keeps it in a global, and its buffer is ours to free.
                     lock (_dexpLock) DestroyDexpLocked();
+                    ReverbAfterTxClose();               // FORK: and so does the reverb instance
                 }
             }
         }

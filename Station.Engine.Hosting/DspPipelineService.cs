@@ -1442,6 +1442,7 @@ public class DspPipelineService : BackgroundService,
     // A record of scalars, so plain equality is the right comparison here —
     // unlike the EQ configs, which hold arrays.
     private TxDexpConfig _appliedTxDexp = TxDexpConfig.Default;
+    private TxReverbConfig _appliedTxReverb = TxReverbConfig.Default;   // FORK
 
     // RX front-end (step attenuator + Mercury preamp). Mirrored to a live
     // Protocol2Client when the value moves; on P1 these go through
@@ -6239,6 +6240,14 @@ public class DspPipelineService : BackgroundService,
         {
             engine.SetTxDexp(txDexp);
             _appliedTxDexp = txDexp;
+        }
+
+        // FORK: the plate reverb. A record, so != is a value comparison.
+        var txReverb = s.TxReverb ?? TxReverbConfig.Default;
+        if (resync || txReverb != _appliedTxReverb)
+        {
+            engine.SetTxReverb(txReverb);
+            _appliedTxReverb = txReverb;
         }
 
         var txGate = s.TxGate ?? TxGateConfig.Default;

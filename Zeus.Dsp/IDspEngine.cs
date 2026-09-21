@@ -538,6 +538,11 @@ public interface IDspEngine : IDisposable
     /// the TX audio plugin chain.</summary>
     void SetTxDexp(TxDexpConfig cfg) { }
 
+    /// <summary>FORK: the TX plate reverb, at WDSP's post-CFC insert. A no-op
+    /// for engines without the insert, and for a build without
+    /// plate_reverb.dll.</summary>
+    void SetTxReverb(TxReverbConfig cfg) { }
+
     /// <summary>Parametric TX equalizer — the Thetis WDSP port's
     /// SetTXAEQProfile with per-point Q. Shares the stage with
     /// <see cref="SetTxEq"/>; last writer wins.</summary>

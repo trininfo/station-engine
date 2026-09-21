@@ -640,6 +640,9 @@ public sealed class RadioService : IDisposable
         var persistedRxEqP = _dspSettingsStore.GetRxEqParametric();
         var persistedCfcP = _dspSettingsStore.GetCfcParametric();
         var persistedDexp = _dspSettingsStore.GetTxDexp() ?? TxDexpConfig.Default;
+        // FORK: a stored reverb that no longer validates (a range changed)
+        // falls back to the default rather than failing the whole startup.
+        var persistedReverb = _dspSettingsStore.GetTxReverb() is { IsWellFormed: true } rv ? rv : TxReverbConfig.Default;
         // AGC mode + custom params. Null on a fresh install / legacy DB row
         // falls back to the Med default so first-connect behaviour is unchanged.
         var persistedAgc = NormalizeAgcConfig(
@@ -891,6 +894,7 @@ public sealed class RadioService : IDisposable
             RxEqParametric: persistedRxEqP,
             CfcParametric: persistedCfcP,
             TxDexp: persistedDexp,
+            TxReverb: persistedReverb,
             // Hydrate drive sliders from RadioStateStore so a fresh frontend
             // connect lands on the operator's last-set values. The private
             // fields above (_drivePct / _tunePct) were already hydrated in the
@@ -1274,6 +1278,7 @@ public sealed class RadioService : IDisposable
     private StateDto ProjectedStateUnderLock() => _state with
     {
         Receivers = ProjectReceivers(_state),
+        TxReverbAvailable = Zeus.Dsp.Wdsp.WdspDspEngine.TxReverbLibraryAvailable,
         MaxReceivers = EffectiveMaxReceivers,
         ConnectedProtocol = ConnectedProtocolLocked(),
     };
@@ -6224,6 +6229,19 @@ public sealed class RadioService : IDisposable
         _log.LogInformation(
             "radio.setTxGate enabled={On} thresh={Thresh:F1}dB",
             cfg.Enabled, cfg.ThresholdDb);
+        return Snapshot();
+    }
+
+    public StateDto SetTxReverb(TxReverbConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!cfg.IsWellFormed)
+            throw new ArgumentException("reverb config out of range", nameof(cfg));
+        Mutate(s => s with { TxReverb = cfg });
+        _dspSettingsStore.Upsert(cfg);
+        _log.LogInformation(
+            "radio.setTxReverb enabled={On} mix={Mix:F2} wet={Wet:F1}dB decay={Decay:F2}s",
+            cfg.Enabled, cfg.Mix, cfg.WetDb, cfg.DecaySeconds);
         return Snapshot();
     }
 

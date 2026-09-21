@@ -21,4 +21,15 @@
     <InternalsVisibleTo Include="Zeus.Server.Tests" />
   </ItemGroup>
 
+  <!-- FORK: the TX plate reverb is plate_reverb.dll from the (private)
+       poseidon-plate-reverb repository, loaded at runtime only if present.
+       When a local build of it exists, copy it next to the engine; when it
+       does not, as in a public clone, this is skipped and the engine simply
+       reports the reverb as unavailable. Override with /p:PlateReverbDll=. -->
+  <PropertyGroup>
+    <PlateReverbDll Condition="'$(PlateReverbDll)' == ''">$(USERPROFILE)\poseidon-plate-reverb\dist\win-x64\plate_reverb.dll</PlateReverbDll>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(PlateReverbDll)')">
+    <None Include="$(PlateReverbDll)" Link="plate_reverb.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

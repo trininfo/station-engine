@@ -649,6 +649,18 @@ public sealed class DspSettingsStore : IDisposable
         ReadJson<TxDexpConfig>(
             _entries.FindOne(x => x.ProfileId == profileId)?.TxDexpJson, _log, "TxDexp");
 
+    public TxReverbConfig? GetTxReverb(string profileId = "default") =>
+        ReadJson<TxReverbConfig>(
+            _entries.FindOne(x => x.ProfileId == profileId)?.TxReverbJson, _log, "TxReverb");
+
+    public void Upsert(TxReverbConfig config, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var e = _entries.FindOne(x => x.ProfileId == profileId) ?? new DspSettingsEntry { ProfileId = profileId };
+        e.TxReverbJson = System.Text.Json.JsonSerializer.Serialize(config, ParametricJson);
+        if (e.Id == 0) _entries.Insert(e); else _entries.Update(e);
+    }
+
     public void Upsert(TxDexpConfig config, string profileId = "default")
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -911,6 +923,7 @@ public sealed class DspSettingsEntry
     public string? RxEqParametricJson { get; set; }
     public string? CfcParametricJson { get; set; }
     public string? TxDexpJson { get; set; }
+    public string? TxReverbJson { get; set; }
     public bool? TxGateEnabled { get; set; }
     public double? TxGateThresholdDb { get; set; }
     public double? TxGateMutedGainDb { get; set; }

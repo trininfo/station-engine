@@ -1323,6 +1323,10 @@ public sealed record StateDto(
     // The TX downward expander. Distinct from TxGate above: that is AMSQ,
     // this is dexp, and a Thetis profile's gate settings are these.
     TxDexpConfig? TxDexp = null,
+    // FORK: the TX plate reverb, and whether plate_reverb.dll is loaded at
+    // all -- a client offers the controls only when it is.
+    TxReverbConfig? TxReverb = null,
+    bool TxReverbAvailable = false,
 
     // ---- Drive slider state ----
     // Operator drive slider position 0..100 (% of MaxPowerWatts via the
