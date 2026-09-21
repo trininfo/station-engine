@@ -30,6 +30,12 @@ struct _txa txa[MAX_CHANNELS];
 
 void create_txa (int channel)
 {
+	// FORK: a fresh channel starts with no insert. The struct is not
+	// re-initialised between close and reopen, and a callback left over
+	// from the last channel would point into a context its owner has
+	// since freed.
+	txa[channel].postcfc.fn = 0;
+	txa[channel].postcfc.ctx = 0;
 	txa[channel].mode   = TXA_LSB;
 	txa[channel].f_low  = -5000.0;
 	txa[channel].f_high = - 100.0;
@@ -476,6 +482,8 @@ void create_txa (int channel)
 
 void destroy_txa (int channel)
 {
+	txa[channel].postcfc.fn = 0;					// FORK: see create_txa
+	txa[channel].postcfc.ctx = 0;
 	// in reverse order, free each item we created
 	destroy_meter (txa[channel].outmeter.p);
 	destroy_resample (txa[channel].rsmpout.p);
@@ -567,6 +575,8 @@ void xtxa (int channel)
 	xmeter (txa[channel].lvlrmeter.p);				// Leveler Meter
 	xcfcomp (txa[channel].cfcomp.p, 0);				// Continuous Frequency Compressor with post-EQ
 	xmeter (txa[channel].cfcmeter.p);				// CFC+PostEQ Meter
+	if (txa[channel].postcfc.fn)					// FORK: post-CFC insert (see TXA.h)
+		txa[channel].postcfc.fn (txa[channel].postcfc.ctx, txa[channel].midbuff, ch[channel].dsp_size);
 	xbandpass (txa[channel].bp0.p, 0);				// primary bandpass filter
 	xcompressor (txa[channel].compressor.p);		// COMP compressor
 	xbandpass (txa[channel].bp1.p, 0);				// aux bandpass (runs if COMP)
@@ -746,6 +756,18 @@ void setDSPBuffsize_txa (int channel)
 *											TXA Properties												*
 *																										*
 ********************************************************************************************************/
+
+// FORK: see TXA.h. Both halves are written under csDSP -- the lock xtxa
+// runs under -- so the DSP thread can never see a new function paired
+// with the old context.
+PORT
+void SetTXAPostCfcInsert (int channel, void (*fn)(void *ctx, double *iq, int frames), void *ctx)
+{
+	EnterCriticalSection (&ch[channel].csDSP);
+	txa[channel].postcfc.fn = fn;
+	txa[channel].postcfc.ctx = fn ? ctx : 0;
+	LeaveCriticalSection (&ch[channel].csDSP);
+}
 
 PORT
 void SetTXAMode (int channel, int mode)

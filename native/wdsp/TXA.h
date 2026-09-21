@@ -162,6 +162,17 @@ struct _txa
 	{
 		CFIR p;
 	} cfir;
+	// FORK: a generic insert point after the CFC, before the sideband
+	// filter -- the last place the TX signal is still real audio, with the
+	// compressor and ALC still ahead of it to guard the peaks. Nothing in
+	// WDSP knows what is plugged in here; the engine installs a callback
+	// (the plate reverb) or leaves it NULL. Kept to this one field and one
+	// call so an upstream merge has as little of ours as possible to fight.
+	struct
+	{
+		void (*fn)(void *ctx, double *iq, int frames);
+		void *ctx;
+	} postcfc;
 };
 
 extern struct _txa txa[];
@@ -187,6 +198,12 @@ extern void setDSPBuffsize_txa (int channel);
 // TXA Properties
 
 extern PORT void SetTXAMode (int channel, int mode);
+
+// FORK: install (fn != NULL) or remove (fn == NULL) the post-CFC insert.
+// fn runs on WDSP's DSP thread, inside csDSP, once per block, with midbuff
+// -- interleaved complex doubles, dsp_size frames, at dsp_rate -- to modify
+// in place. It must not block or allocate.
+extern PORT void SetTXAPostCfcInsert (int channel, void (*fn)(void *ctx, double *iq, int frames), void *ctx);
 
 extern void TXAResCheck (int channel);
 
